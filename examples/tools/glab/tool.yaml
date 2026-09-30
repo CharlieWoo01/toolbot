@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# Example of a GitLab-hosted tool with several assets: the GitLab CLI
+# (https://gitlab.com/gitlab-org/cli). Copy this directory to tools/glab/ to
+# start tracking it. Release tags look like v1.119.0; asset names embed the
+# bare version, and one checksums.txt (sha256sum format) covers every asset.
+name: glab
+version: "1.119.0"
+tag: v{version}
+
+source:
+  provider: gitlab
+  repository: gitlab-org/cli
+  # host: https://gitlab.example.com   # for self-managed GitLab (default https://gitlab.com)
+
+checksum:
+  type: file
+  file: checksums.txt
+
+# One version bump updates every asset below in the same MR.
+assets:
+  linux-amd64:
+    name: glab_{version}_linux_amd64.tar.gz
+    destination: linux-amd64/glab.tar.gz
+  windows-amd64:
+    name: glab_{version}_windows_amd64.zip
+    destination: windows-amd64/glab.zip

@@ -1,0 +1,20 @@
+{
+  "lockfileVersion": 1,
+  "tool": "pact-broker-cli",
+  "version": "0.8.6",
+  "tag": "v0.8.6",
+  "source": {
+    "provider": "github",
+    "repository": "pact-foundation/pact-broker-cli",
+    "host": "https://github.com"
+  },
+  "assets": {
+    "windows-amd64": {
+      "upstream": "pact-broker-cli-x86_64-pc-windows-msvc.zip",
+      "destination": "tools/pact-broker-cli/pact-broker-cli-x86_64-pc-windows-msvc.zip",
+      "size": 3174680,
+      "sha256": "bb639caabdcfde754c4059b99f181efa9f64a5a87699bf185c8a75b7c7e8dc40",
+      "verifiedBy": "sha256:pact-broker-cli-x86_64-pc-windows-msvc.zip.sha256"
+    }
+  }
+}

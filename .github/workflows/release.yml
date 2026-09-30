@@ -1,0 +1,94 @@
+# Push a tag vX.Y.Z (matching pyproject.toml) to publish a release:
+#   1. tests and definition checks
+#   2. ghcr.io/<owner>/toolbot:X.Y.Z (multi-arch, attested)
+#   3. a GitHub Release with generated notes and the image digest
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.lock
+      - name: Tag matches pyproject.toml
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match pyproject.toml version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - run: pip install --constraint requirements.lock -e ".[dev]"
+      - run: ruff check src tests
+      - run: mypy
+      - run: pytest
+      - run: toolbot validate
+      - run: toolbot verify
+
+  image:
+    needs: check
+    uses: ./.github/workflows/image-build.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    with:
+      push: true
+      version: ${{ needs.check.outputs.version }}
+
+  release:
+    name: GitHub Release
+    needs: [check, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.check.outputs.version }}
+          IMAGE: ${{ needs.image.outputs.image }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          cat > notes.md <<EOF
+          ## Container image
+
+          \`\`\`
+          ${IMAGE}:${VERSION}
+          ${IMAGE}@${DIGEST}
+          \`\`\`
+
+          Verify provenance: \`gh attestation verify oci://${IMAGE}:${VERSION} --repo ${GITHUB_REPOSITORY}\`
+
+          ## Upgrading
+
+          Bump both the CI template ref (\`${TAG}\`) and the image tag (\`${VERSION}\`) together.
+          EOF
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes-file notes.md --generate-notes

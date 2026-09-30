@@ -1,0 +1,33 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.pip-cache/
+
+# Docs build output
+site/
+public/
+
+# Local secrets (tokens belong in CI/CD variables, never in the repository)
+.env
+.env.*
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Toolbot staging/backup files (never committed, even if a run is killed mid-update)
+*.toolbot-tmp-*
+*.toolbot-backup-*

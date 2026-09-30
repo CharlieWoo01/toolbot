@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toolbot.invalid/schema/tool.schema.json",
+  "title": "Toolbot tool definition",
+  "description": "tools/<name>/tool.yaml. Editor aid only: `toolbot validate` is authoritative and also enforces cross-field rules (duplicate destinations, ambiguous matchers, provider capabilities).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "version", "source", "assets"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$",
+      "description": "Tool name; must equal the directory name."
+    },
+    "version": {
+      "type": "string",
+      "description": "Current version WITHOUT tag prefix, quoted. Toolbot updates this."
+    },
+    "tag": {
+      "type": "string",
+      "default": "{version}",
+      "description": "Upstream tag template with exactly one {version}, e.g. \"v{version}\", \"release-{version}\", \"cli-v{version}\"."
+    },
+    "versioning": {
+      "enum": ["semver", "pep440"],
+      "default": "semver",
+      "description": "How versions are parsed and ordered."
+    },
+    "prereleases": {
+      "type": "boolean",
+      "default": false,
+      "description": "Also propose prereleases (e.g. 2.0.0-rc.1 or releases marked as prerelease upstream)."
+    },
+    "ignore": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Versions never proposed: exact (\"0.9.0\") or constraints (\">=2.0.0\", \">=1.4, <1.5\")."
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "repository"],
+      "properties": {
+        "provider": { "enum": ["github", "gitlab"] },
+        "repository": {
+          "type": "string",
+          "description": "github: owner/repo. gitlab: group[/subgroup...]/project."
+        },
+        "host": {
+          "type": "string",
+          "format": "uri",
+          "description": "https base URL for GitHub Enterprise or self-managed GitLab. Defaults to github.com / gitlab.com."
+        }
+      }
+    },
+    "checksum": { "$ref": "#/$defs/checksum" },
+    "assets": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$" },
+      "additionalProperties": { "$ref": "#/$defs/asset" }
+    }
+  },
+  "$defs": {
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["destination"],
+      "oneOf": [{ "required": ["name"] }, { "required": ["pattern"] }],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Exact upstream asset name; may use {version} and {tag}."
+        },
+        "pattern": {
+          "type": "string",
+          "description": "Glob (* and ?) that must match exactly one upstream asset; may use {version} and {tag}."
+        },
+        "destination": {
+          "type": "string",
+          "description": "Path relative to tools/<name>/ where the asset is stored."
+        },
+        "checksum": { "$ref": "#/$defs/checksum" }
+      }
+    },
+    "checksum": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "enum": ["none", "provider", "file"],
+          "description": "none: no verification. provider: digest reported by the provider API (GitHub only). file: checksum file attached to the release."
+        },
+        "file": {
+          "type": "string",
+          "description": "type=file: release asset holding checksums, e.g. \"{asset}.sha256\", \"SHA256SUMS\", \"checksums.txt\"."
+        },
+        "algorithm": { "enum": ["sha256", "sha512"], "default": "sha256" }
+      }
+    }
+  }
+}

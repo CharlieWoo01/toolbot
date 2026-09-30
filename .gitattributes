@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.zip binary
+*.gz binary
+*.xz binary
+*.exe binary
+*.tar binary
+*.jar binary

@@ -1,0 +1,130 @@
+# Toolbot project pipelines
+#
+#   merge requests    lint, types, tests, image build + smoke test (not pushed), docs build
+#   default branch    same, image pushed as :sha-<commit>, docs published to GitLab Pages
+#   tags vX.Y.Z       image pushed as :X.Y.Z (what other projects pin)
+#   schedule / manual Toolbot runs on this project from the image built for the commit
+#                     (set TOOLBOT_RUN=true on the schedule)
+#
+# Required CI/CD variable (masked, protected): TOOLBOT_GITLAB_TOKEN (api scope, Developer).
+# Optional: TOOLBOT_GITHUB_TOKEN (read-only), TOOLBOT_GITLAB_SOURCE_TOKEN, TOOLBOT_MR_LABELS,
+#           TOOLBOT_GIT_AUTHOR_NAME / TOOLBOT_GIT_AUTHOR_EMAIL.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    # Avoid duplicate branch + MR pipelines.
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+stages:
+  - test
+  - build
+  - deploy
+
+include:
+  - local: templates/toolbot.gitlab-ci.yml
+
+variables:
+  PYTHON_IMAGE: python:3.13.15-slim-trixie@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b
+  PIP_CACHE_DIR: $CI_PROJECT_DIR/.pip-cache
+  # This project runs Toolbot from the image built in the same pipeline.
+  TOOLBOT_IMAGE: $CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHORT_SHA
+
+.not-schedule: &not-schedule
+  - if: $CI_PIPELINE_SOURCE == "schedule"
+    when: never
+  - when: on_success
+
+.python:
+  image: $PYTHON_IMAGE
+  cache:
+    key:
+      files: [pyproject.toml, requirements.lock]
+    paths: [.pip-cache/]
+
+test:
+  extends: .python
+  stage: test
+  rules: *not-schedule
+  before_script:
+    # git is needed by the lifecycle tests (real repositories against a local bare remote).
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends git > /dev/null
+    - pip install --quiet --constraint requirements.lock -e ".[dev]"
+  script:
+    - ruff check src tests
+    - ruff format --check src tests
+    - mypy
+    - pytest
+    - toolbot validate
+    - toolbot verify
+
+docs:
+  extends: .python
+  stage: build
+  rules: *not-schedule
+  script:
+    - pip install --quiet --constraint requirements.lock ".[docs]"
+    - mkdocs build --strict
+  artifacts:
+    paths: [site/]
+    expire_in: 1 week
+
+image:
+  stage: build
+  image: docker:29.7.2
+  services:
+    - docker:29.7.2-dind
+  variables:
+    DOCKER_TLS_CERTDIR: /certs
+    LOCAL_IMAGE: toolbot:ci
+  script:
+    - |
+      VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
+      if [ -n "${CI_COMMIT_TAG:-}" ] && [ "v$VERSION" != "$CI_COMMIT_TAG" ]; then
+        echo "tag $CI_COMMIT_TAG does not match pyproject.toml version $VERSION" >&2; exit 1
+      fi
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker pull "$CI_REGISTRY_IMAGE:latest-build-cache" || true
+    - >
+      docker build
+      --cache-from "$CI_REGISTRY_IMAGE:latest-build-cache"
+      --build-arg BUILDKIT_INLINE_CACHE=1
+      --build-arg TOOLBOT_VERSION="$VERSION"
+      --build-arg TOOLBOT_REVISION="$CI_COMMIT_SHA"
+      --tag "$LOCAL_IMAGE" .
+    # Same smoke test as GitHub Actions and local builds.
+    - sh scripts/smoke-test-image.sh "$LOCAL_IMAGE"
+    - |
+      push() { docker tag "$LOCAL_IMAGE" "$1" && docker push "$1"; }
+      if [ "$CI_PIPELINE_SOURCE" != "merge_request_event" ]; then
+        push "$CI_REGISTRY_IMAGE:sha-$CI_COMMIT_SHORT_SHA"
+        [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ] && push "$CI_REGISTRY_IMAGE:latest-build-cache"
+        [ -n "${CI_COMMIT_TAG:-}" ] && push "$CI_REGISTRY_IMAGE:$VERSION"
+      fi
+      true
+
+pages:
+  stage: deploy
+  image: $PYTHON_IMAGE
+  needs: [docs]
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+  script:
+    - mv site public
+  artifacts:
+    paths: [public/]
+
+# From the template: Toolbot on this project runs from the image built above.
+toolbot-check:
+  stage: deploy
+  needs: [image]
+
+# The test job already validates and verifies from source.
+toolbot-verify:
+  rules:
+    - when: never

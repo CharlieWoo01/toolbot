@@ -1,0 +1,30 @@
+# Pull requests: build + smoke-test the image (nothing pushed).
+# main: also push ghcr.io/<owner>/toolbot:sha-<commit> (multi-arch, attested).
+# Versioned images are published by release.yml.
+name: Image
+
+on:
+  pull_request:
+    paths-ignore: ["docs/**", "**/*.md"]
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    uses: ./.github/workflows/image-build.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    with:
+      push: ${{ github.event_name != 'pull_request' }}

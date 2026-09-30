@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=../../schema/tool.schema.json
+#
+# Pact Broker CLI — https://github.com/pact-foundation/pact-broker-cli
+# Toolbot tracks its GitHub releases (tags look like v0.8.6) and raises a
+# merge request with the verified assets below when a new one appears.
+name: pact-broker-cli
+version: "0.8.6"
+tag: v{version}
+
+source:
+  provider: github
+  repository: pact-foundation/pact-broker-cli
+
+# Every release publishes a sha256sum-style sidecar per archive, e.g.
+# pact-broker-cli-x86_64-pc-windows-msvc.zip.sha256.
+checksum:
+  type: file
+  file: "{asset}.sha256"
+
+assets:
+  windows-amd64:
+    name: pact-broker-cli-x86_64-pc-windows-msvc.zip
+    destination: pact-broker-cli-x86_64-pc-windows-msvc.zip
