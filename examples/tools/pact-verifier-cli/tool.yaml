@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# Pact verifier CLI — verifies a provider against pact files.
+#
+# WHAT THIS EXAMPLE SHOWS: a MONOREPO. pact-foundation/pact-reference releases
+# many components from one repository, each with its own tag prefix:
+#
+#   libpact_ffi-v0.5.9            ← ignored (tag doesn't match the template)
+#   libpact_models-v1.3.15        ← ignored
+#   pact_verifier_cli-v1.3.5      ← this tool
+#
+# The `tag` template below makes Toolbot consider only the verifier's
+# releases, and turns "pact_verifier_cli-v1.3.5" into version "1.3.5".
+#
+# Upstream:  https://github.com/pact-foundation/pact-reference/releases
+#   assets    pact-verifier-windows-x86_64.exe.gz (+ .sha256)
+#             pact-verifier-linux-x86_64.gz       (+ .sha256)
+
+name: pact-verifier-cli         # tool names use "-", whatever upstream calls it
+version: "1.3.4"
+tag: pact_verifier_cli-v{version}
+
+source:
+  provider: github
+  repository: pact-foundation/pact-reference
+
+checksum:
+  type: file
+  file: "{asset}.sha256"
+
+assets:
+  windows-amd64:
+    name: pact-verifier-windows-x86_64.exe.gz
+    destination: windows-amd64/pact-verifier.exe.gz
+  linux-amd64:
+    name: pact-verifier-linux-x86_64.gz
+    destination: linux-amd64/pact-verifier.gz

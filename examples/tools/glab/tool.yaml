@@ -1,27 +1,52 @@
 # yaml-language-server: $schema=../../../schema/tool.schema.json
 #
-# Example of a GitLab-hosted tool with several assets: the GitLab CLI
-# (https://gitlab.com/gitlab-org/cli). Copy this directory to tools/glab/ to
-# start tracking it. Release tags look like v1.119.0; asset names embed the
-# bare version, and one checksums.txt (sha256sum format) covers every asset.
+# glab — the official GitLab CLI.
+#
+# WHAT THIS EXAMPLE SHOWS: a tool whose *releases are published on GitLab*
+# (gitlab.com) rather than GitHub. That is all "GitLab source" means: it is
+# about where the upstream project lives, not where your repository lives.
+# Your repository could be on the same GitLab, a different one, or anywhere
+# Toolbot's target is configured.
+#
+# Upstream:  https://gitlab.com/gitlab-org/cli/-/releases
+#   tag         v1.120.0
+#   assets      glab_1.120.0_linux_amd64.tar.gz
+#               glab_1.120.0_windows_amd64.zip
+#               checksums.txt            (SHA-256 of every asset)
+#
+# What `toolbot check` does with this file:
+#   1. Calls https://gitlab.com/api/v4/projects/gitlab-org%2Fcli/releases
+#      and keeps releases whose tag looks like "v<version>".
+#   2. Picks the highest stable version, e.g. 1.120.0, and compares it
+#      with `version` below (1.119.0) → update available.
+#   3. Fills {version} into the asset names → glab_1.120.0_linux_amd64.tar.gz …
+#   4. Downloads both files and checksums.txt from the release, checks each
+#      file's SHA-256 against checksums.txt.
+#   5. Writes tools/glab/linux-amd64/glab.tar.gz and tools/glab/windows-amd64/glab.zip,
+#      bumps `version` to 1.120.0, updates tool.lock.json, and raises ONE
+#      merge request containing all of it. If any file fails, nothing changes.
+#
+# Public project: no token needed. For a private project on another GitLab,
+# set TOOLBOT_GITLAB_SOURCE_TOKEN (read_api).
+
 name: glab
-version: "1.119.0"
-tag: v{version}
+version: "1.119.0"              # the version currently committed (no "v")
+tag: v{version}                 # upstream tags are v1.119.0, v1.120.0, …
 
 source:
-  provider: gitlab
-  repository: gitlab-org/cli
-  # host: https://gitlab.example.com   # for self-managed GitLab (default https://gitlab.com)
+  provider: gitlab              # releases come from GitLab's Releases API
+  repository: gitlab-org/cli    # https://gitlab.com/gitlab-org/cli
+  # host: https://gitlab.example.com   # only for a self-managed GitLab
 
 checksum:
-  type: file
-  file: checksums.txt
+  type: file                    # verify against a checksum file in the release…
+  file: checksums.txt           # …this one, which lists every asset
 
-# One version bump updates every asset below in the same MR.
+# Two platforms of the same version, updated together in one merge request.
 assets:
   linux-amd64:
-    name: glab_{version}_linux_amd64.tar.gz
-    destination: linux-amd64/glab.tar.gz
+    name: glab_{version}_linux_amd64.tar.gz    # upstream file name (version filled in)
+    destination: linux-amd64/glab.tar.gz       # saved as tools/glab/linux-amd64/glab.tar.gz
   windows-amd64:
     name: glab_{version}_windows_amd64.zip
     destination: windows-amd64/glab.zip

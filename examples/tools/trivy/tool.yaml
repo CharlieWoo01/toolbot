@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# Trivy — vulnerability and misconfiguration scanner.
+#
+# WHAT THIS EXAMPLE SHOWS: holding back major versions with `ignore`, and a
+# release that also contains many files you don't want (.deb, .rpm, Sigstore
+# signatures). Exact `name`s pick precisely the two archives below; nothing
+# else in the release is downloaded.
+#
+# Upstream:  https://github.com/aquasecurity/trivy/releases
+#   tag       v0.74.0
+#   assets    trivy_0.74.0_windows-64bit.zip
+#             trivy_0.74.0_Linux-64bit.tar.gz
+#             trivy_0.74.0_checksums.txt
+
+name: trivy
+version: "0.73.0"
+tag: v{version}
+
+# Stay on 0.x until the team has tested 1.0 (remove when ready).
+ignore:
+  - ">=1.0.0"
+
+source:
+  provider: github
+  repository: aquasecurity/trivy
+
+checksum:
+  type: file
+  file: trivy_{version}_checksums.txt
+
+assets:
+  windows-amd64:
+    name: trivy_{version}_windows-64bit.zip
+    destination: windows-amd64/trivy.zip
+  linux-amd64:
+    name: trivy_{version}_Linux-64bit.tar.gz      # upstream capitalises "Linux"
+    destination: linux-amd64/trivy.tar.gz

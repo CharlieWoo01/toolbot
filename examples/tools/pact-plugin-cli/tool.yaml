@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# Pact plugin CLI — installs and manages Pact plugins.
+#
+# WHAT THIS EXAMPLE SHOWS: another monorepo, with a hyphenated tag prefix.
+# pact-foundation/pact-plugins also releases "pact-rust-driver-v…" and
+# "pact-jvm-driver-v…" (with no assets); the template skips them.
+#
+# Upstream:  https://github.com/pact-foundation/pact-plugins/releases
+#   tag       pact-plugin-cli-v0.3.0
+#   assets    pact-plugin-windows-x86_64.exe.gz (+ .sha256)
+#             pact-plugin-linux-x86_64.gz       (+ .sha256)
+
+name: pact-plugin-cli
+version: "0.2.0"
+tag: pact-plugin-cli-v{version}
+
+source:
+  provider: github
+  repository: pact-foundation/pact-plugins
+
+checksum:
+  type: file
+  file: "{asset}.sha256"
+
+assets:
+  windows-amd64:
+    name: pact-plugin-windows-x86_64.exe.gz
+    destination: windows-amd64/pact-plugin.exe.gz
+  linux-amd64:
+    name: pact-plugin-linux-x86_64.gz
+    destination: linux-amd64/pact-plugin.gz

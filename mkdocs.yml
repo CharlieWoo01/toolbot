@@ -42,6 +42,7 @@ nav:
       - Introduction: guide/introduction.md
       - Quick start: guide/quick-start.md
       - Adding a tool: guide/adding-a-tool.md
+      - Examples: guide/examples.md
       - Tags & asset matching: guide/matching.md
       - Versions, prereleases & ignoring: guide/versions.md
       - Checksums: guide/checksums.md

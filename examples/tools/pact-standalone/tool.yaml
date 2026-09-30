@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# Pact standalone — the Ruby-based `pact-*` command bundle
+# (pact-broker, pact-mock-service, pact-provider-verifier, …).
+#
+# WHAT THIS EXAMPLE SHOWS:
+#   * asset names that CONTAIN the version → use {version} in `name`;
+#   * choosing a checksum strategy when upstream's own checksums are weak.
+#
+# Upstream:  https://github.com/pact-foundation/pact-standalone/releases
+#   tag       v2.6.4
+#   assets    pact-2.6.4-windows-x86_64.zip
+#             pact-2.6.4-linux-x86_64.tar.gz
+#             pact-2.6.4-windows-x86_64.zip.checksum   ← SHA-1, not SHA-256
+#
+# Toolbot only accepts SHA-256/SHA-512 checksum files (SHA-1 is too weak to
+# trust), so this tool uses the SHA-256 digest GitHub itself computes for every
+# uploaded release asset instead (`type: provider`).
+
+name: pact-standalone
+version: "2.6.3"
+tag: v{version}
+
+source:
+  provider: github
+  repository: pact-foundation/pact-standalone
+
+checksum:
+  type: provider                # GitHub's per-asset SHA-256 digest
+
+assets:
+  windows-amd64:
+    name: pact-{version}-windows-x86_64.zip     # → pact-2.6.3-windows-x86_64.zip
+    destination: windows-amd64/pact.zip         # stable name: MRs show a modification
+  linux-amd64:
+    name: pact-{version}-linux-x86_64.tar.gz
+    destination: linux-amd64/pact.tar.gz

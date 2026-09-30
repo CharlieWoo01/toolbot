@@ -17,6 +17,7 @@ from toolbot.config.loader import load_tool
 from toolbot.services.artifacts import apply_version
 from toolbot.services.context import Context, create_context
 from toolbot.services.discovery import discover
+from toolbot.services.updater import plan
 
 pytestmark = pytest.mark.integration
 REPO = Path(__file__).resolve().parents[2]
@@ -48,3 +49,11 @@ def test_gitlab_glab(tmp_path: Path, ctx: Context) -> None:
     apply_version(ctx, tmp_path, "glab", "1.119.0")
     lock = json.loads((tmp_path / "tools/glab/tool.lock.json").read_text())
     assert lock["assets"]["linux-amd64"]["verifiedBy"] == "sha256:checksums.txt"
+
+
+def test_every_example_resolves_against_its_live_release(ctx: Context) -> None:
+    """Catches upstream projects renaming assets or checksum files."""
+    outcomes = plan(ctx, REPO / "examples", None, None, None)
+    failures = {o.tool: o.message for o in outcomes if o.status == "failed"}
+    assert failures == {}
+    assert len(outcomes) >= 8

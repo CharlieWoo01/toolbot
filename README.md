@@ -79,7 +79,7 @@ assets:
 # ignore: ["0.9.0", ">=2.0.0"]
 ```
 
-A GitLab-hosted, multi-asset example is in [`examples/tools/glab/tool.yaml`](examples/tools/glab/tool.yaml). Reference: [tool.yaml](docs/reference/tool-yaml.md).
+More real, commented definitions are in [`examples/`](examples/README.md): the Pact CLIs (including monorepo tags), gitleaks, trivy and the GitLab-hosted glab. Reference: [tool.yaml](docs/reference/tool-yaml.md).
 
 ## Running it in GitLab CI
 
@@ -97,7 +97,7 @@ Add the masked, protected variable `TOOLBOT_GITLAB_TOKEN` (project access token,
 | I want to… | Read |
 | --- | --- |
 | Try it locally, including a full run against a test project | [Running locally](docs/deploy/local.md) |
-| Add a tool | [Adding a tool](docs/guide/adding-a-tool.md) |
+| Add a tool | [Adding a tool](docs/guide/adding-a-tool.md) · [Examples](docs/guide/examples.md) |
 | Understand prereleases, ignore rules and rejections | [Versions](docs/guide/versions.md) |
 | Configure checksums | [Checksums](docs/guide/checksums.md) |
 | Build or mirror the image | [Container image](docs/deploy/image.md) |
@@ -112,7 +112,7 @@ Add the masked, protected variable `TOOLBOT_GITLAB_TOKEN` (project access token,
 ├── src/toolbot/              the application (see docs/contributing/development.md)
 ├── tests/                    pytest; tests/integration is opt-in (-m integration)
 ├── tools/                    tools tracked by this project (Pact Broker CLI)
-├── examples/tools/glab/      GitLab-hosted, multi-asset example
+├── examples/tools/           commented example definitions (Pact CLIs, gitleaks, trivy, glab)
 ├── schema/tool.schema.json   editor schema for tool.yaml
 ├── templates/                GitLab CI template for consuming projects
 ├── docs/ + mkdocs.yml        documentation site

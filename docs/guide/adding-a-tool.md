@@ -91,7 +91,7 @@ The directory name is the tool name: lowercase letters, digits and `-`.
         destination: internal-cli
     ```
 
-All fields are described in the [tool.yaml reference](../reference/tool-yaml.md).
+All fields are described in the [tool.yaml reference](../reference/tool-yaml.md). For more real definitions (Pact CLIs, monorepos, scanners) and a step-by-step walkthrough, see [Examples](examples.md).
 
 ## 3. Fetch the artifacts and create the lock file
 

@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# Pact stub server — serves stub responses from pact files.
+#
+# WHAT THIS EXAMPLE SHOWS: plain gzipped executables (not archives), with
+# per-file SHA-256 sidecars. Toolbot stores exactly what upstream publishes;
+# your build scripts decompress it (e.g. `gunzip -k pact-stub-server.gz`).
+#
+# Upstream:  https://github.com/pact-foundation/pact-stub-server/releases
+#   tag       v0.7.1
+#   assets    pact-stub-server-windows-x86_64.exe.gz (+ .sha256)
+#             pact-stub-server-linux-x86_64.gz       (+ .sha256)
+
+name: pact-stub-server
+version: "0.7.0"
+tag: v{version}
+
+source:
+  provider: github
+  repository: pact-foundation/pact-stub-server
+
+checksum:
+  type: file
+  file: "{asset}.sha256"
+
+assets:
+  windows-amd64:
+    name: pact-stub-server-windows-x86_64.exe.gz
+    destination: windows-amd64/pact-stub-server.exe.gz
+  linux-amd64:
+    name: pact-stub-server-linux-x86_64.gz
+    destination: linux-amd64/pact-stub-server.gz

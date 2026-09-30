@@ -236,3 +236,11 @@ def test_with_version_preserves_layout() -> None:
     text = '# header\nname: widget\nversion: "0.8.6"   # current\ntag: v{version}\nassets:\n  a:\n    version: nested\n'
     assert with_version(text, "f", "0.9.0") == text.replace('"0.8.6"', '"0.9.0"')
     assert with_version("version: 1.2.3\n", "f", "1.3.0") == 'version: "1.3.0"\n'
+
+
+def test_every_example_definition_is_valid() -> None:
+    examples = REPO / "examples"
+    loaded = load_all(examples, PROVIDERS)
+    assert loaded.errors == {}
+    assert len(loaded.tools) >= 8
+    assert {t.name for t in loaded.tools} >= {"glab", "pact-cli", "pact-verifier-cli", "gitleaks", "trivy"}
