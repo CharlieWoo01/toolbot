@@ -5,7 +5,8 @@
   "description": "tools/<name>/tool.yaml. Editor aid only: `toolbot validate` is authoritative and also enforces cross-field rules (duplicate destinations, ambiguous matchers, provider capabilities).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "version", "source", "assets"],
+  "required": ["name", "version", "source"],
+  "anyOf": [{ "required": ["assets"] }, { "required": ["version-files"] }],
   "properties": {
     "name": {
       "type": "string",
@@ -32,24 +33,54 @@
       "description": "Also propose prereleases (e.g. 2.0.0-rc.1 or releases marked as prerelease upstream)."
     },
     "ignore": {
-      "type": "array",
-      "items": { "type": "string" },
+      "$ref": "#/$defs/constraints",
       "description": "Versions never proposed: exact (\"0.9.0\") or constraints (\">=2.0.0\", \">=1.4, <1.5\")."
+    },
+    "allow": {
+      "$ref": "#/$defs/constraints",
+      "description": "Constraints every proposed version must satisfy, e.g. \"<2.0.0\" (stay on 1.x) or \"==1.4.2\" (pin)."
     },
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "repository"],
+      "required": ["repository"],
       "properties": {
-        "provider": { "enum": ["github", "gitlab"] },
+        "provider": {
+          "enum": ["github", "gitlab"],
+          "description": "Required unless host is a host name from toolbot.yaml."
+        },
         "repository": {
           "type": "string",
           "description": "github: owner/repo. gitlab: group[/subgroup...]/project."
         },
         "host": {
           "type": "string",
-          "format": "uri",
-          "description": "https base URL for GitHub Enterprise or self-managed GitLab. Defaults to github.com / gitlab.com."
+          "description": "A host name from toolbot.yaml (e.g. internal-gitlab) or an https base URL for GitHub Enterprise / self-managed GitLab. Defaults to github.com / gitlab.com."
+        },
+        "versions": {
+          "enum": ["releases", "tags"],
+          "default": "releases",
+          "description": "releases: GitHub/GitLab releases. tags: plain git tags, for projects that never create releases (assets must then use url or path)."
+        }
+      }
+    },
+    "version-files": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Version pins in other files that are bumped with the tool, e.g. .terraform-version or a Dockerfile ARG.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "template"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Relative to tools/<name>/, or to the repository root with a leading \"/\", e.g. \"/.terraform-version\"."
+          },
+          "template": {
+            "type": "string",
+            "description": "Text containing {version} or {tag}, e.g. \"ARG TERRAFORM_VERSION={version}\". The text for the current version is replaced with the text for the new one."
+          }
         }
       }
     },
@@ -62,23 +93,47 @@
     }
   },
   "$defs": {
+    "constraints": {
+      "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }]
+    },
     "asset": {
       "type": "object",
       "additionalProperties": false,
       "required": ["destination"],
-      "oneOf": [{ "required": ["name"] }, { "required": ["pattern"] }],
+      "oneOf": [
+        { "required": ["name"] },
+        { "required": ["pattern"] },
+        { "required": ["url"] },
+        { "required": ["path"] }
+      ],
       "properties": {
         "name": {
           "type": "string",
-          "description": "Exact upstream asset name; may use {version} and {tag}."
+          "description": "Exact release asset name; may use {version} and {tag}."
         },
         "pattern": {
           "type": "string",
-          "description": "Glob (* and ?) that must match exactly one upstream asset; may use {version} and {tag}."
+          "description": "Glob (* and ?) that must match exactly one release asset; may use {version} and {tag}."
+        },
+        "url": {
+          "type": "string",
+          "description": "Download URL (https) for tools published outside release assets, e.g. Terraform; may use {version} and {tag}."
+        },
+        "path": {
+          "type": "string",
+          "description": "A file committed in the source repository, read at the release tag, e.g. \"dist/linux/tool\"; may use {version} and {tag}."
+        },
+        "extract": {
+          "type": "string",
+          "description": "The download is a zip/tar(.gz/.xz/.bz2) archive: commit only this file from it, e.g. \"terraform\" or \"linux-amd64/helm\". The checksum is verified on the archive."
         },
         "destination": {
           "type": "string",
-          "description": "Path relative to tools/<name>/ where the asset is stored."
+          "description": "Path relative to tools/<name>/, or to the repository root with a leading \"/\" (e.g. \"/bin/terraform\")."
+        },
+        "executable": {
+          "type": "boolean",
+          "description": "Commit with the executable bit. Default: true when the destination has no extension (or is .sh/.bash/.py)."
         },
         "checksum": { "$ref": "#/$defs/checksum" }
       }
@@ -90,11 +145,19 @@
       "properties": {
         "type": {
           "enum": ["none", "provider", "file"],
-          "description": "none: no verification. provider: digest reported by the provider API (GitHub only). file: checksum file attached to the release."
+          "description": "none: no verification. provider: digest reported by the provider API (GitHub release assets only). file: a checksum file."
         },
         "file": {
           "type": "string",
           "description": "type=file: release asset holding checksums, e.g. \"{asset}.sha256\", \"SHA256SUMS\", \"checksums.txt\"."
+        },
+        "url": {
+          "type": "string",
+          "description": "type=file: URL of the checksum file instead of a release asset, e.g. \"https://get.helm.sh/{asset}.sha256sum\"."
+        },
+        "path": {
+          "type": "string",
+          "description": "type=file: checksum file committed in the source repository at the release tag, e.g. \"dist/SHA256SUMS\"."
         },
         "algorithm": { "enum": ["sha256", "sha512"], "default": "sha256" }
       }

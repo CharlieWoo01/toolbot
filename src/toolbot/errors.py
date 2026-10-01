@@ -22,6 +22,8 @@ ErrorCode = Literal[
     "HTTP_ERROR",
     "CHECKSUM_MISMATCH",
     "CHECKSUM_UNAVAILABLE",
+    "ARCHIVE_INVALID",
+    "VERSION_FILE_MISMATCH",
     "UNSAFE_PATH",
     "VERIFY_FAILED",
     "VERSION_INVALID",
@@ -44,6 +46,6 @@ class ConfigValidationError(ToolbotError):
     """Carries every problem found in a definition, not just the first."""
 
     def __init__(self, source: str, problems: list[str]) -> None:
-        detail = "\n".join(f"  - {p}" for p in problems)
+        detail = "\n".join(f"  - {problem}" for problem in problems)
         super().__init__("CONFIG_INVALID", f"{source} is invalid:\n{detail}")
         self.problems = problems
