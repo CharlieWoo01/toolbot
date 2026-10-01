@@ -27,6 +27,8 @@ from toolbot.errors import ErrorCode, ToolbotError
 
 SENSITIVE_HEADERS = frozenset({"authorization", "private-token", "job-token", "cookie"})
 TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
+REDIRECTABLE_METHODS = frozenset({"GET", "HEAD"})
+IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE"})
 DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 # httpx logs full URLs at INFO; redirect targets can contain signed credentials.
@@ -46,21 +48,21 @@ class HttpError(ToolbotError):
         self.status = status
 
 
-def display_url(raw: str) -> str:
+def display_url(raw_url: str) -> str:
     """URL without query/fragment, for messages."""
     try:
-        parts = urlsplit(raw)
+        parts = urlsplit(raw_url)
     except ValueError:
         return "<invalid url>"
     return f"{parts.scheme}://{parts.netloc}{parts.path}"
 
 
-def same_origin(a: str, b: str) -> bool:
+def same_origin(first_url: str, second_url: str) -> bool:
     try:
-        pa, pb = urlsplit(a), urlsplit(b)
+        first, second = urlsplit(first_url), urlsplit(second_url)
     except ValueError:
         return False
-    return (pa.scheme, pa.hostname, pa.port) == (pb.scheme, pb.hostname, pb.port)
+    return (first.scheme, first.hostname, first.port) == (second.scheme, second.hostname, second.port)
 
 
 class HttpClient:
@@ -88,159 +90,160 @@ class HttpClient:
     def close(self) -> None:
         self._client.close()
 
-    # -- reads ---------------------------------------------------------------
+    # -- reads -------------------------------------------------------------------
 
-    def get_json(self, req: HttpRequest, what: str, auth_hint: str = "") -> Any:
-        response = self._send("GET", req, what, auth_hint)
+    def get_json(self, request: HttpRequest, what: str, auth_hint: str = "") -> Any:
+        response = self._send("GET", request, what, auth_hint)
         try:
             return response.json()
         except ValueError:
-            raise ToolbotError("HTTP_ERROR", f"{what}: response from {display_url(req.url)} was not JSON") from None
+            raise ToolbotError("HTTP_ERROR", f"{what}: response from {display_url(request.url)} was not JSON") from None
 
-    def get_text(self, req: HttpRequest, what: str, auth_hint: str = "", max_bytes: int = 1024 * 1024) -> str:
-        response = self._send("GET", req, what, auth_hint)
+    def get_text(self, request: HttpRequest, what: str, auth_hint: str = "", max_bytes: int = 1024 * 1024) -> str:
+        response = self._send("GET", request, what, auth_hint)
         if len(response.content) > max_bytes:
             raise ToolbotError("HTTP_ERROR", f"{what}: response exceeds {max_bytes} bytes")
         return response.content.decode("utf-8", errors="replace")
 
-    def download(self, req: HttpRequest, path: Path, what: str, max_bytes: int, auth_hint: str = "") -> int:
-        """Stream the body to ``path`` (must not exist). Returns the byte count."""
-        with self._stream(req, what, auth_hint) as response:
-            declared = response.headers.get("content-length")
-            expected = int(declared) if declared and declared.isdigit() else None
-            if expected is not None and expected > max_bytes:
-                raise ToolbotError("HTTP_ERROR", f"{what}: {expected} bytes exceeds the {max_bytes} byte limit")
-            received = 0
-            try:
-                with path.open("xb") as out:
-                    for chunk in response.iter_bytes():
-                        received += len(chunk)
-                        if received > max_bytes:
-                            raise ToolbotError("HTTP_ERROR", f"{what}: download exceeds the {max_bytes} byte limit")
-                        out.write(chunk)
-            except httpx.TransportError as err:
-                raise ToolbotError("HTTP_ERROR", f"{what}: download interrupted: {type(err).__name__}") from None
-        if expected is not None and received != expected:
-            raise ToolbotError("HTTP_ERROR", f"{what}: truncated download ({received} of {expected} bytes)")
-        return received
+    def exists(self, request: HttpRequest, what: str, auth_hint: str = "") -> bool:
+        """HEAD request (following redirects): True on success, False on 404."""
+        try:
+            self._send("HEAD", request, what, auth_hint)
+        except HttpError as error:
+            if error.status == 404:
+                return False
+            if error.status == 405:  # server doesn't support HEAD; can't tell without downloading
+                return True
+            raise
+        return True
 
-    # -- writes (target provider APIs) ----------------------------------------
+    def download(self, request: HttpRequest, path: Path, what: str, max_bytes: int, auth_hint: str = "") -> int:
+        """Stream the body to ``path`` (must not exist). Returns the byte count."""
+        response = self._open_stream(request, what, auth_hint)
+        try:
+            declared_length = response.headers.get("content-length")
+            expected_bytes = int(declared_length) if declared_length and declared_length.isdigit() else None
+            if expected_bytes is not None and expected_bytes > max_bytes:
+                raise ToolbotError("HTTP_ERROR", f"{what}: {expected_bytes} bytes exceeds the {max_bytes} byte limit")
+            received_bytes = 0
+            try:
+                with path.open("xb") as output:
+                    for chunk in response.iter_bytes():
+                        received_bytes += len(chunk)
+                        if received_bytes > max_bytes:
+                            raise ToolbotError("HTTP_ERROR", f"{what}: download exceeds the {max_bytes} byte limit")
+                        output.write(chunk)
+            except httpx.TransportError as error:
+                raise ToolbotError("HTTP_ERROR", f"{what}: download interrupted: {type(error).__name__}") from None
+        finally:
+            response.close()
+        if expected_bytes is not None and received_bytes != expected_bytes:
+            raise ToolbotError("HTTP_ERROR", f"{what}: truncated download ({received_bytes} of {expected_bytes} bytes)")
+        return received_bytes
+
+    # -- writes (target provider APIs) ---------------------------------------------
 
     def request(
         self,
         method: str,
-        req: HttpRequest,
+        request: HttpRequest,
         what: str,
         *,
         json: Any = None,
         params: Mapping[str, str | int] | None = None,
     ) -> httpx.Response:
-        return self._send(method, req, what, "", json=json, params=params)
+        return self._send(method, request, what, "", json=json, params=params)
 
-    # -- internals -------------------------------------------------------------
+    # -- internals -------------------------------------------------------------------
 
     def _send(
         self,
         method: str,
-        req: HttpRequest,
+        request: HttpRequest,
         what: str,
         auth_hint: str,
         *,
         json: Any = None,
         params: Mapping[str, str | int] | None = None,
     ) -> httpx.Response:
-        url = req.url
-        headers = {k.lower(): v for k, v in req.headers.items()}
-        origin = url
+        url = request.url
+        headers = {name.lower(): value for name, value in request.headers.items()}
         for _hop in range(self._max_redirects + 1):
-            _require_https(url, what)
+            require_https(url, what)
 
-            def send(u: str = url, h: dict[str, str] = headers) -> httpx.Response:
-                return self._client.request(method, u, headers=h, json=json, params=params)
+            def send(current_url: str = url, current_headers: dict[str, str] = headers) -> httpx.Response:
+                return self._client.request(method, current_url, headers=current_headers, json=json, params=params)
 
             response = self._with_retries(method, what, send)
-            if response.is_redirect and method == "GET":
+            if response.is_redirect and method in REDIRECTABLE_METHODS:
                 url = str(response.next_request.url) if response.next_request else ""
                 response.close()
-                if not same_origin(url, origin):
-                    headers = {k: v for k, v in headers.items() if k not in SENSITIVE_HEADERS}
+                if not same_origin(url, request.url):
+                    headers = without_credentials(headers)
                 continue
             if response.is_success:
                 return response
-            raise _status_error(response, what, req.url, auth_hint)
-        raise ToolbotError("HTTP_ERROR", f"{what}: too many redirects from {display_url(req.url)}")
+            raise status_error(response, what, request.url, auth_hint)
+        raise ToolbotError("HTTP_ERROR", f"{what}: too many redirects from {display_url(request.url)}")
 
-    def _stream(self, req: HttpRequest, what: str, auth_hint: str) -> _StreamContext:
-        return _StreamContext(self, req, what, auth_hint)
-
-    def _open_stream(self, req: HttpRequest, what: str, auth_hint: str) -> httpx.Response:
-        url = req.url
-        headers = {k.lower(): v for k, v in req.headers.items()}
+    def _open_stream(self, request: HttpRequest, what: str, auth_hint: str) -> httpx.Response:
+        url = request.url
+        headers = {name.lower(): value for name, value in request.headers.items()}
         for _hop in range(self._max_redirects + 1):
-            _require_https(url, what)
+            require_https(url, what)
 
-            def open_(u: str = url, h: dict[str, str] = headers) -> httpx.Response:
-                return self._client.send(self._client.build_request("GET", u, headers=h), stream=True)
+            def open_stream(current_url: str = url, current_headers: dict[str, str] = headers) -> httpx.Response:
+                built = self._client.build_request("GET", current_url, headers=current_headers)
+                return self._client.send(built, stream=True)
 
-            response = self._with_retries("GET", what, open_)
+            response = self._with_retries("GET", what, open_stream)
             if response.is_redirect:
                 url = str(response.next_request.url) if response.next_request else ""
                 response.close()
-                if not same_origin(url, req.url):
-                    headers = {k: v for k, v in headers.items() if k not in SENSITIVE_HEADERS}
+                if not same_origin(url, request.url):
+                    headers = without_credentials(headers)
                 continue
             if response.is_success:
                 return response
             response.read()
             response.close()
-            raise _status_error(response, what, req.url, auth_hint)
-        raise ToolbotError("HTTP_ERROR", f"{what}: too many redirects from {display_url(req.url)}")
+            raise status_error(response, what, request.url, auth_hint)
+        raise ToolbotError("HTTP_ERROR", f"{what}: too many redirects from {display_url(request.url)}")
 
     def _with_retries(self, method: str, what: str, send: Callable[[], httpx.Response]) -> httpx.Response:
-        idempotent = method in ("GET", "HEAD", "PUT", "DELETE")
         attempt = 0
         while True:
             attempt += 1
             try:
                 response = send()
-            except (httpx.ConnectError, httpx.ConnectTimeout) as err:
+            except (httpx.ConnectError, httpx.ConnectTimeout) as error:
                 # The request never reached the server: safe to retry for any method.
                 if attempt > self._retries:
-                    raise ToolbotError("HTTP_ERROR", f"{what}: connection failed: {type(err).__name__}") from None
-            except httpx.TransportError as err:
-                if not idempotent or attempt > self._retries:
-                    raise ToolbotError("HTTP_ERROR", f"{what}: request failed: {type(err).__name__}") from None
+                    raise ToolbotError("HTTP_ERROR", f"{what}: connection failed: {type(error).__name__}") from None
+            except httpx.TransportError as error:
+                if method not in IDEMPOTENT_METHODS or attempt > self._retries:
+                    raise ToolbotError("HTTP_ERROR", f"{what}: request failed: {type(error).__name__}") from None
             else:
-                if response.status_code not in TRANSIENT_STATUS or not idempotent or attempt > self._retries:
+                retryable = response.status_code in TRANSIENT_STATUS and method in IDEMPOTENT_METHODS
+                if not retryable or attempt > self._retries:
                     return response
-                delay = _retry_after(response) or self._backoff * 2 ** (attempt - 1)
+                delay = retry_after_seconds(response) or self._backoff * 2 ** (attempt - 1)
                 response.close()
                 self._sleep(min(delay, 60.0))
                 continue
             self._sleep(min(self._backoff * 2 ** (attempt - 1), 60.0))
 
 
-class _StreamContext:
-    def __init__(self, client: HttpClient, req: HttpRequest, what: str, auth_hint: str) -> None:
-        self._args = (client, req, what, auth_hint)
-        self._response: httpx.Response | None = None
-
-    def __enter__(self) -> httpx.Response:
-        client, req, what, hint = self._args
-        self._response = client._open_stream(req, what, hint)
-        return self._response
-
-    def __exit__(self, *exc: object) -> None:
-        if self._response is not None:
-            self._response.close()
+def without_credentials(headers: dict[str, str]) -> dict[str, str]:
+    return {name: value for name, value in headers.items() if name not in SENSITIVE_HEADERS}
 
 
-def _retry_after(response: httpx.Response) -> float | None:
+def retry_after_seconds(response: httpx.Response) -> float | None:
     value = response.headers.get("retry-after", "")
     return float(value) if value.isdigit() else None
 
 
-def _require_https(url: str, what: str) -> None:
+def require_https(url: str, what: str) -> None:
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -251,19 +254,21 @@ def _require_https(url: str, what: str) -> None:
         raise ToolbotError("HTTP_ERROR", f"{what}: refusing URL with embedded credentials")
 
 
-def _status_error(response: httpx.Response, what: str, requested: str, auth_hint: str) -> HttpError:
-    where = f"{what} ({display_url(requested)})"
+def status_error(response: httpx.Response, what: str, requested_url: str, auth_hint: str) -> HttpError:
+    location = f"{what} ({display_url(requested_url)})"
     hint = f" — {auth_hint}" if auth_hint else ""
     status = response.status_code
     remaining = response.headers.get("x-ratelimit-remaining") or response.headers.get("ratelimit-remaining")
     if status == 429 or (status == 403 and remaining == "0"):
-        return HttpError("RATE_LIMITED", status, f"{where}: API rate limit exceeded{hint}")
+        return HttpError("RATE_LIMITED", status, f"{location}: API rate limit exceeded{hint}")
     if status == 401:
         return HttpError(
-            "AUTH_FAILED", status, f"{where}: authentication failed (HTTP 401); token missing, expired or invalid{hint}"
+            "AUTH_FAILED",
+            status,
+            f"{location}: authentication failed (HTTP 401); token missing, expired or invalid{hint}",
         )
     if status == 403:
-        return HttpError("AUTH_FAILED", status, f"{where}: access forbidden (HTTP 403){hint}")
+        return HttpError("AUTH_FAILED", status, f"{location}: access forbidden (HTTP 403){hint}")
     if status == 404:
-        return HttpError("HTTP_ERROR", status, f"{where}: not found (HTTP 404){hint}")
-    return HttpError("HTTP_ERROR", status, f"{where}: unexpected HTTP {status}")
+        return HttpError("HTTP_ERROR", status, f"{location}: not found (HTTP 404){hint}")
+    return HttpError("HTTP_ERROR", status, f"{location}: unexpected HTTP {status}")
