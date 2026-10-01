@@ -61,6 +61,7 @@ nav:
       - Running locally: deploy/local.md
       - Container image: deploy/image.md
       - Docker, Kubernetes & other CI: deploy/anywhere.md
+      - Creating tokens: deploy/creating-tokens.md
       - Tokens & permissions: deploy/tokens.md
       - Proxies & internal networks: deploy/networking.md
       - Upgrading: deploy/upgrading.md

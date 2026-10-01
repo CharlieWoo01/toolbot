@@ -2,6 +2,8 @@
 
 Tokens are only ever environment variables (CI/CD variables, Kubernetes secrets…), never tool definitions. Store them **masked** and **protected**.
 
+Step-by-step instructions for creating them on GitHub and GitLab: [Creating tokens](creating-tokens.md).
+
 ## What's needed
 
 | Variable | Required | Used for | Permissions |
