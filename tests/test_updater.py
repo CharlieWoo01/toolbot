@@ -193,7 +193,7 @@ def test_ignored_version(env: Env) -> None:
     commit_all(env.setup.work, "ignore 2.0.0")
     env.publish("widget", "2.0.0")
     outcome = env.check()["widget"]
-    assert outcome.status == "up-to-date" and "ignored newer: 2.0.0" in outcome.message
+    assert outcome.status == "up-to-date" and "held back by ignore/allow: 2.0.0" in outcome.message
     assert env.target.requests == []
 
 

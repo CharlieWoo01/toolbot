@@ -1,9 +1,12 @@
 """The target-provider contract: where Toolbot proposes updates.
 
-A target provider owns every platform-specific operation on the repository
+A target provider owns every platform-specific operation on one repository
 receiving updates: its Git URL and push credentials, and the lifecycle of
-change requests (GitLab merge requests; GitHub pull requests in future).
-The updater only ever talks to this interface.
+change requests (GitLab merge requests, GitHub pull requests). The updater
+only ever talks to this interface.
+
+Each platform module also offers repository discovery for groups /
+organisations (used by ``targets`` in toolbot.yaml).
 """
 
 from __future__ import annotations
@@ -20,16 +23,18 @@ State = Literal["open", "closed", "merged"]
 @dataclass(frozen=True)
 class ChangeRequest:
     id: int
-    """Platform number (GitLab MR iid)."""
+    """Platform number (GitLab MR iid, GitHub PR number)."""
     url: str
     state: State
     source_branch: str
     target_branch: str
     title: str
+    reference_prefix: str = "!"
 
     @property
     def ref(self) -> str:
-        return f"!{self.id}"
+        """How the platform refers to it in text: ``!12`` on GitLab, ``#12`` on GitHub."""
+        return f"{self.reference_prefix}{self.id}"
 
 
 @dataclass(frozen=True)
@@ -41,9 +46,20 @@ class ChangeRequestSpec:
     labels: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class RepositoryInfo:
+    """A repository found by group/organisation discovery."""
+
+    path: str
+    default_branch: str | None
+    archived: bool = False
+
+
 class TargetProvider(ABC):
     kind: str
     """Human name of a change request on this platform, e.g. "merge request"."""
+    repository: str
+    """Path of the repository, e.g. ``team/ci-tools``."""
 
     @abstractmethod
     def repository_url(self) -> str:

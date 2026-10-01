@@ -1,8 +1,9 @@
-"""The update lifecycle: ``toolbot check``.
+"""The update lifecycle for one repository: ``toolbot check``.
 
 For each tool, independently (one tool failing never stops the others):
 
-1. **Discover** the newest acceptable release (``services.discovery``).
+1. **Discover** the newest acceptable release (``services.discovery``), after
+   applying the central rules from toolbot.yaml.
 2. **Identify** the update by its deterministic branch
    ``toolbot/<tool>/<version>`` and look up change requests from that branch:
 
@@ -13,19 +14,17 @@ For each tool, independently (one tool failing never stops the others):
      → skip, don't fight the revert.
 
 3. **One active update per tool.** Other open Toolbot change requests for the
-   same tool (older or now-ignored versions) are superseded: after the new
-   request is created, they are closed with a comment and their branches
-   deleted, but only if their head commit is still Toolbot's own. If a human
-   pushed to such a branch, Toolbot stops and reports the tool as *blocked*
-   rather than discard their work.
+   same tool are superseded after the new one is created: closed with a
+   comment and their branches deleted, but only if their head commit is still
+   Toolbot's own. If a person pushed to such a branch the tool is *blocked*.
 4. **Apply** the update in a temporary worktree based on the latest base
    branch: download, verify, replace artifacts, bump ``version``, commit.
-5. **Push** with ``--force-with-lease`` (new branch: must not exist; existing
-   Toolbot-only branch from an interrupted run: must be unchanged).
-6. **Create** the change request (labels ensured), then supersede.
+5. **Push** with ``--force-with-lease``, then **create** the change request
+   and supersede older ones.
 
-When a tool is already up to date, open Toolbot requests for versions the
-base branch already has are closed as obsolete.
+In dry-run mode the same decisions are made from real data (definitions from
+the base branch, existing change requests), but nothing is downloaded,
+written, pushed, created or closed.
 """
 
 from __future__ import annotations
@@ -36,22 +35,25 @@ from pathlib import Path
 from typing import Literal
 
 from toolbot.assets.matching import resolve_assets
+from toolbot.config.control import Rule, apply_rules
 from toolbot.config.loader import LoadResult, load_all
 from toolbot.config.models import ToolDefinition
-from toolbot.config.placeholders import render
 from toolbot.errors import ToolbotError
 from toolbot.git import Repository, Worktree
+from toolbot.providers.source.base import Release
 from toolbot.providers.target.base import ChangeRequest, ChangeRequestSpec, TargetProvider
 from toolbot.services import messages
-from toolbot.services.artifacts import apply_version
+from toolbot.services.artifacts import apply_version, asset_download_request, checksum_source
 from toolbot.services.context import Context
 from toolbot.services.discovery import Discovery, discover
+from toolbot.version_files import bump_version_files
 from toolbot.versions import parse_version
 
 OutcomeStatus = Literal[
     "up-to-date",
     "ahead",
     "no-releases",
+    "disabled",
     "created",
     "superseded",
     "exists",
@@ -80,56 +82,67 @@ class Outcome:
 class UpdateSettings:
     base_branch: str
     labels: tuple[str, ...] = ("toolbot", "tool-update")
+    repository_path: str = ""
+    """Used to match central rules (``rules[].repositories``)."""
+    dry_run: bool = False
 
 
 class Updater:
-    def __init__(self, ctx: Context, target: TargetProvider, repo: Repository, settings: UpdateSettings) -> None:
+    def __init__(
+        self,
+        ctx: Context,
+        target: TargetProvider,
+        repository: Repository,
+        settings: UpdateSettings,
+        rules: tuple[Rule, ...] = (),
+    ) -> None:
         self.ctx = ctx
         self.target = target
-        self.repo = repo
+        self.repository = repository
         self.settings = settings
+        self.rules = rules
 
     def run(self, only: Sequence[str] | None = None) -> list[Outcome]:
         outcomes: list[Outcome] = []
         try:
-            base_commit = self.repo.fetch_branch(self.settings.base_branch)
-            with self.repo.worktree(base_commit) as worktree:
-                # Definitions come from the base branch itself, not from the caller's checkout.
+            base_commit = self.repository.fetch_branch(self.settings.base_branch)
+            with self.repository.worktree(base_commit) as worktree:
+                # Definitions come from the base branch itself, not from any local checkout.
                 loaded = load_all(worktree.path, self.ctx.providers, list(only) if only else None)
-                outcomes.extend(_load_failures(loaded))
-                for tool in loaded.tools:
+                outcomes.extend(load_failures(loaded))
+                for definition in loaded.tools:
                     try:
+                        tool = apply_rules(definition, self.rules, self.settings.repository_path)
+                        if tool is None:
+                            outcomes.append(Outcome(definition.name, "disabled", "disabled by a rule in toolbot.yaml"))
+                            continue
                         outcomes.append(self._update_tool(tool, worktree, base_commit))
-                    except ToolbotError as err:
-                        outcomes.append(Outcome(tool.name, "failed", err.message, current=tool.version))
+                    except ToolbotError as error:
+                        outcomes.append(Outcome(definition.name, "failed", error.message, current=definition.version))
         finally:
-            self.repo.cleanup()
+            self.repository.cleanup()
         return outcomes
 
     def _update_tool(self, tool: ToolDefinition, worktree: Worktree, base_commit: str) -> Outcome:
         found = discover(self.ctx, tool)
-        base = self.settings.base_branch
-        prefix = messages.branch_prefix(tool.name)
-        open_requests = self.target.list_open(prefix, base)
+        base_branch = self.settings.base_branch
+        open_requests = self.target.list_open(messages.branch_prefix(tool.name), base_branch)
 
-        if found.status != "update-available":
+        if found.status != "update-available" or found.latest is None:
             self._close_obsolete(tool, open_requests)
-            return _not_outdated(found)
-        latest = found.latest
-        if latest is None:  # implied by status; keeps the type checker honest
-            return _not_outdated(found)
-        version = latest.version.raw
+            return not_outdated(found)
+        version = found.latest.version.raw
         branch = messages.branch_name(tool.name, version)
         outcome = Outcome(tool.name, "created", current=tool.version, latest=version, branch=branch)
 
         existing = self.target.find_by_branch(branch)
-        if blocked := _existing_blocks(existing, outcome, base, self.target.kind):
-            return blocked
+        if decided := decide_from_existing(existing, outcome, base_branch, self.target.kind):
+            return decided
 
-        # Other open Toolbot requests for this tool get superseded, unless a human touched them.
-        others = [r for r in open_requests if r.source_branch != branch]
-        other_heads: dict[int, str] = {}
-        for request in others:
+        # Other open Toolbot requests for this tool get superseded, unless a person touched them.
+        superseded = [request for request in open_requests if request.source_branch != branch]
+        superseded_heads: dict[int, str] = {}
+        for request in superseded:
             head = self._toolbot_head(tool.name, request.source_branch)
             if head is None:
                 outcome.status = "blocked"
@@ -139,53 +152,68 @@ class Updater:
                 )
                 outcome.url = request.url
                 return outcome
-            other_heads[request.id] = head
+            superseded_heads[request.id] = head
 
         # A branch without a change request is left over from an interrupted run.
-        expected = self.repo.remote_head(branch)
-        if expected is not None and self._toolbot_head(tool.name, branch) is None:
+        expected_head = self.repository.remote_head(branch)
+        if expected_head is not None and self._toolbot_head(tool.name, branch) is None:
             outcome.status = "blocked"
             outcome.message = f"branch {branch} exists with commits not made by Toolbot; delete or merge it"
             return outcome
 
+        if self.settings.dry_run:
+            outcome.status = "would-create"
+            outcome.url = found.latest.release.url
+            outcome.details.extend(preview_assets(self.ctx, tool, found.latest.release, version))
+            if superseded:
+                outcome.details.append("would supersede: " + ", ".join(request.ref for request in superseded))
+            return outcome
+
         worktree.reset(branch, base_commit)
-        result = apply_version(self.ctx, worktree.path, tool.name, version, latest.release)
-        commit = worktree.commit([f"tools/{tool.name}"], messages.commit_message(tool.name, tool.version, version))
+        result = apply_version(self.ctx, worktree.path, tool.name, version, found.latest.release)
+        commit = worktree.commit(
+            result.paths,
+            messages.commit_message(tool.name, tool.version, version),
+            executable=result.executable_paths,
+        )
         if commit is None:
             return Outcome(tool.name, "up-to-date", "no changes to commit", tool.version, version)
-        self.repo.push(worktree.path, branch, expected)
+        self.repository.push(worktree.path, branch, expected_head)
 
-        superseding = [r.ref for r in others]
         spec = ChangeRequestSpec(
             source_branch=branch,
-            target_branch=base,
+            target_branch=base_branch,
             title=messages.title(tool.name, version),
-            description=messages.description(tool, result, superseding),
+            description=messages.description(tool, result, [request.ref for request in superseded]),
             labels=self.settings.labels,
         )
         try:
             request = self.target.create(spec)
-        except ToolbotError as err:
+        except ToolbotError as error:
             raise ToolbotError(
-                err.code,
-                f"branch {branch} was pushed but creating the {self.target.kind} failed: {err.message}. "
+                error.code,
+                f"branch {branch} was pushed but creating the {self.target.kind} failed: {error.message}. "
                 "The next run will retry.",
             ) from None
         outcome.url = request.url
         outcome.message = f"{self.target.kind} {request.ref}"
-        for old in others:
-            self._retire(old, other_heads[old.id], f"Superseded by {request.ref} ({tool.name} {version}).")
+        for old_request in superseded:
+            self._retire(
+                old_request,
+                superseded_heads[old_request.id],
+                f"Superseded by {request.ref} ({tool.name} {version}).",
+            )
             outcome.status = "superseded"
-            outcome.details.append(f"closed {old.ref} ({old.source_branch})")
-        outcome.details.extend(f"{a.id}: {a.upstream} ({a.verified_by})" for a in result.assets)
+            outcome.details.append(f"closed {old_request.ref} ({old_request.source_branch})")
+        outcome.details.extend(f"{asset.id}: {asset.upstream} ({asset.verified_by})" for asset in result.assets)
         return outcome
 
     def _close_obsolete(self, tool: ToolDefinition, open_requests: list[ChangeRequest]) -> None:
         current = parse_version(tool.version, tool.versioning)
         for request in open_requests:
-            text = messages.version_from_branch(tool.name, request.source_branch)
+            branch_version = messages.version_from_branch(tool.name, request.source_branch)
             try:
-                version = parse_version(text, tool.versioning) if text else None
+                version = parse_version(branch_version, tool.versioning) if branch_version else None
             except ToolbotError:
                 version = None
             if version is None or version > current:
@@ -194,6 +222,9 @@ class Updater:
             if head is None:
                 self.ctx.warn(f"{tool.name}: {request.ref} is obsolete but has non-Toolbot commits; leaving it open")
                 continue
+            if self.settings.dry_run:
+                self.ctx.log(f"toolbot: would close obsolete {request.ref} ({request.source_branch})")
+                continue
             self._retire(
                 request, head, f"Obsolete: `{self.settings.base_branch}` already has {tool.name} {tool.version}."
             )
@@ -201,9 +232,9 @@ class Updater:
     def _retire(self, request: ChangeRequest, head: str, comment: str) -> None:
         try:
             self.target.close(request, comment)
-            self.repo.delete_branch(request.source_branch, head)
-        except ToolbotError as err:
-            self.ctx.warn(f"could not close {request.ref}: {err.message}")
+            self.repository.delete_branch(request.source_branch, head)
+        except ToolbotError as error:
+            self.ctx.warn(f"could not close {request.ref}: {error.message}")
 
     def _toolbot_head(self, tool: str, branch: str) -> str | None:
         """Head commit of ``branch`` if it was made by Toolbot for ``tool``, else None.
@@ -213,15 +244,18 @@ class Updater:
         GitLab's "Rebase" button keeps the commit message and trailers, so a
         rebased Toolbot branch still counts as Toolbot's.
         """
-        head = self.repo.fetch_branch(branch)
-        trailers = self.repo.trailers(head)
+        head = self.repository.fetch_branch(branch)
+        trailers = self.repository.trailers(head)
         return head if trailers.get(messages.TRAILER_TOOL) == tool else None
 
 
-def _existing_blocks(existing: list[ChangeRequest], outcome: Outcome, base: str, kind: str) -> Outcome | None:
+def decide_from_existing(
+    existing: list[ChangeRequest], outcome: Outcome, base_branch: str, kind: str
+) -> Outcome | None:
+    """Existing change requests for the exact tool + version decide the outcome, if any."""
     for request in existing:
-        outcome.url = request.url
         if request.state == "open":
+            outcome.url = request.url
             outcome.status = "exists"
             outcome.message = f"{kind} {request.ref} is already open"
             return outcome
@@ -230,7 +264,7 @@ def _existing_blocks(existing: list[ChangeRequest], outcome: Outcome, base: str,
             outcome.url = request.url
             outcome.status = "reverted"
             outcome.message = (
-                f"{request.ref} for {outcome.latest} was merged, but {base} has {outcome.current} "
+                f"{request.ref} for {outcome.latest} was merged, but {base_branch} has {outcome.current} "
                 "(reverted?). Not proposing it again."
             )
             return outcome
@@ -240,97 +274,106 @@ def _existing_blocks(existing: list[ChangeRequest], outcome: Outcome, base: str,
             outcome.status = "rejected"
             outcome.message = (
                 f"{outcome.latest} was rejected ({request.ref} closed without merging). Reopen it to proceed, "
-                f'or add "{outcome.latest}" to ignore in tool.yaml to make this explicit.'
+                f'or add "{outcome.latest}" to ignore to make this explicit.'
             )
             return outcome
     return None
 
 
-def _not_outdated(found: Discovery) -> Outcome:
+def not_outdated(found: Discovery) -> Outcome:
     latest = found.latest.version.raw if found.latest else None
-    note = f"ignored newer: {', '.join(found.ignored)}" if found.ignored else ""
-    status: OutcomeStatus = (
-        "up-to-date" if found.status == "up-to-date" else ("ahead" if found.status == "ahead" else "no-releases")
-    )
-    message = {
-        "up-to-date": "up to date",
-        "ahead": "current version is newer than any acceptable release",
-        "no-releases": "no acceptable releases found (check tag, prereleases and ignore settings)",
-    }[status]
-    return Outcome(found.tool.name, status, message + (f"; {note}" if note else ""), found.tool.version, latest)
+    status: OutcomeStatus
+    if found.status == "up-to-date":
+        status, message = "up-to-date", "up to date"
+    elif found.status == "ahead":
+        status, message = "ahead", "current version is newer than any acceptable release"
+    else:
+        status, message = "no-releases", "no acceptable releases found (check tag, prereleases, ignore and allow)"
+    if found.held_back:
+        message = f"{message}; held back by ignore/allow: {found.held_back_summary()}"
+    return Outcome(found.tool.name, status, message, found.tool.version, latest)
 
 
-def _load_failures(loaded: LoadResult) -> list[Outcome]:
-    return [Outcome(name, "failed", err.message) for name, err in loaded.errors.items()]
+def load_failures(loaded: LoadResult) -> list[Outcome]:
+    return [Outcome(name, "failed", error.message) for name, error in loaded.errors.items()]
 
 
-def plan(
-    ctx: Context,
-    root: Path,
-    only: Sequence[str] | None,
-    target: TargetProvider | None,
-    base_branch: str | None,
-) -> list[Outcome]:
-    """``toolbot check --dry-run``: everything up to the point of changing anything.
+def preview_assets(ctx: Context, tool: ToolDefinition, release: Release, version: str) -> list[str]:
+    """What would be downloaded and how it would be verified, without downloading.
 
-    Reads definitions from ``root``, discovers releases, resolves assets and
-    checksum files against the release (no downloads), and, if a target is
-    configured, looks up existing change requests read-only. Never writes
-    files, runs git, pushes or creates change requests.
+    Fails the same way the real update would if an asset or checksum source is
+    missing.
+    """
+    provider = ctx.providers.require(tool.source.provider)
+    values = {"version": version, "tag": release.tag}
+    release_label = f"{tool.source.provider}:{tool.source.repository}@{release.tag}"
+    lines: list[str] = []
+    for asset in resolve_assets(tool.assets, release.assets, values, release_label):
+        # Release assets are known to exist from the listing; URLs and repository files are probed.
+        if (asset.by_url or asset.from_repository) and not ctx.http.exists(
+            asset_download_request(ctx, provider, tool, release, asset),
+            f'asset "{asset.config.id}"',
+            provider.auth_hint(tool.source),
+        ):
+            raise ToolbotError(
+                "ASSET_NOT_FOUND", f'asset "{asset.config.id}": {asset.upstream.url} does not exist at {release.tag}'
+            )
+        checksum = asset.config.checksum
+        if checksum.type == "file":
+            source = checksum_source(ctx, provider, tool, release, asset, values)
+            if (checksum.url or checksum.path) and not ctx.http.exists(
+                source.request, "checksum file", provider.auth_hint(tool.source)
+            ):
+                raise ToolbotError("CHECKSUM_UNAVAILABLE", f"checksum file {source.label} does not exist")
+            verification = f"{checksum.algorithm} via {source.label}"
+        elif checksum.type == "provider":
+            if asset.upstream.digest is None:
+                raise ToolbotError(
+                    "CHECKSUM_UNAVAILABLE", f'{tool.source.provider} reported no digest for "{asset.upstream.name}"'
+                )
+            verification = "provider digest"
+        else:
+            verification = "not verified"
+        extracted = f" (extract {asset.extract})" if asset.extract else ""
+        lines.append(f"✓ {asset.upstream.name}{extracted} → {asset.config.destination} [{verification}]")
+    # Version pins are checked against the definitions read (base branch or local checkout).
+    lines += [
+        f"✓ {change.display}: {change.replacements} version pin(s)" for change in bump_version_files(tool, version)
+    ]
+    return lines
+
+
+def plan_local(ctx: Context, root: Path, only: Sequence[str] | None) -> list[Outcome]:
+    """``toolbot check --dry-run`` without a target: from the local checkout, read-only.
+
+    Reads definitions from ``root``, applies central rules, discovers
+    releases and checks every asset and checksum source exists. Never
+    downloads, writes, runs git or contacts a target.
     """
     loaded = load_all(root, ctx.providers, list(only) if only else None)
-    outcomes = _load_failures(loaded)
-    for tool in loaded.tools:
+    outcomes = load_failures(loaded)
+    for definition in loaded.tools:
         try:
-            found = discover(ctx, tool)
-            if found.status != "update-available":
-                outcomes.append(_not_outdated(found))
+            tool = apply_rules(definition, ctx.control.rules, "")
+            if tool is None:
+                outcomes.append(Outcome(definition.name, "disabled", "disabled by a rule in toolbot.yaml"))
                 continue
-            if found.latest is None:
-                outcomes.append(_not_outdated(found))
+            found = discover(ctx, tool)
+            if found.status != "update-available" or found.latest is None:
+                outcomes.append(not_outdated(found))
                 continue
             version = found.latest.version.raw
-            release = found.latest.release
-            branch = messages.branch_name(tool.name, version)
             outcome = Outcome(
-                tool.name, "would-create", current=tool.version, latest=version, url=release.url, branch=branch
+                tool.name,
+                "would-create",
+                current=tool.version,
+                latest=version,
+                url=found.latest.release.url,
+                branch=messages.branch_name(tool.name, version),
             )
-            values = {"version": version, "tag": release.tag}
-            label = f"{tool.source.provider}:{tool.source.repository}@{release.tag}"
-            for resolved in resolve_assets(tool.assets, release.assets, values, label):
-                check = resolved.config.checksum
-                if check.type == "file":
-                    name = render(check.file, {**values, "asset": resolved.upstream.name})
-                    verification = f"{check.algorithm} via {name}"
-                    if not any(a.name == name for a in release.assets):
-                        raise ToolbotError(
-                            "CHECKSUM_UNAVAILABLE", f'checksum file "{name}" is not attached to release {release.tag}'
-                        )
-                elif check.type == "provider":
-                    if resolved.upstream.digest is None:
-                        raise ToolbotError(
-                            "CHECKSUM_UNAVAILABLE",
-                            f'{tool.source.provider} reported no digest for "{resolved.upstream.name}"',
-                        )
-                    verification = "provider digest"
-                else:
-                    verification = "not verified"
-                outcome.details.append(f"✓ {resolved.upstream.name} → {resolved.config.destination} [{verification}]")
-            if target is not None and base_branch is not None:
-                existing = target.find_by_branch(branch)
-                if blocked := _existing_blocks(existing, outcome, base_branch, target.kind):
-                    outcomes.append(blocked)
-                    continue
-                others = [
-                    r
-                    for r in target.list_open(messages.branch_prefix(tool.name), base_branch)
-                    if r.source_branch != branch
-                ]
-                if others:
-                    outcome.details.append("would supersede: " + ", ".join(r.ref for r in others))
-            else:
-                outcome.details.append("(target not configured: existing merge requests not checked)")
+            outcome.details.extend(preview_assets(ctx, tool, found.latest.release, version))
+            outcome.details.append("(no target configured: existing change requests not checked)")
             outcomes.append(outcome)
-        except ToolbotError as err:
-            outcomes.append(Outcome(tool.name, "failed", err.message, current=tool.version))
+        except ToolbotError as error:
+            outcomes.append(Outcome(definition.name, "failed", error.message, current=definition.version))
     return outcomes

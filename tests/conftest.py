@@ -5,21 +5,22 @@ target provider."""
 from __future__ import annotations
 
 import hashlib
-import json
 import subprocess
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
+from toolbot.config.control import ControlConfig
+from toolbot.errors import ToolbotError
 from toolbot.git import GitAuth
 from toolbot.http import HttpClient
 from toolbot.providers.source import create_source_providers
-from toolbot.providers.target.base import ChangeRequest, ChangeRequestSpec, TargetProvider
-from toolbot.services.context import Context
+from toolbot.providers.target.base import ChangeRequest, ChangeRequestSpec, State, TargetProvider
+from toolbot.services.context import Context, build_host_registry
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -42,43 +43,54 @@ class Router:
     def json(
         self, url: str, body: Any, status: int = 200, method: str = "GET", headers: dict[str, str] | None = None
     ) -> Router:
-        return self.add(method, url, lambda _r: httpx.Response(status, json=body, headers=headers))
+        return self.add(method, url, lambda _request: httpx.Response(status, json=body, headers=headers))
 
     def bytes(self, url: str, body: bytes | str, status: int = 200) -> Router:
         data = body.encode() if isinstance(body, str) else body
-        return self.add("GET", url, lambda _r: httpx.Response(status, content=data))
+        return self.add("GET", url, lambda _request: httpx.Response(status, content=data))
 
     def redirect(self, url: str, location: str) -> Router:
-        return self.add("GET", url, lambda _r: httpx.Response(302, headers={"location": location}))
+        return self.add("GET", url, lambda _request: httpx.Response(302, headers={"location": location}))
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
-        key = (request.method, str(request.url.copy_with(query=None)))
-        handler = self.routes.get(key)
+        url = str(request.url.copy_with(query=None))
+        handler = self.routes.get((request.method, url))
+        if handler is None and request.method == "HEAD" and ("GET", url) in self.routes:
+            # Like a real server: HEAD answers with the GET route's status and headers, no body.
+            response = self.routes[("GET", url)](request)
+            return httpx.Response(response.status_code, headers=response.headers)
         return handler(request) if handler else httpx.Response(404, json={"message": "not found"})
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
 
     def to(self, prefix: str) -> list[httpx.Request]:
-        return [r for r in self.requests if str(r.url).startswith(prefix)]
+        return [request for request in self.requests if str(request.url).startswith(prefix)]
 
     def writes(self) -> list[httpx.Request]:
-        return [r for r in self.requests if r.method != "GET"]
+        return [request for request in self.requests if request.method not in ("GET", "HEAD")]
 
 
 def make_http(router: Router) -> HttpClient:
-    return HttpClient(router.transport(), retries=2, backoff=0, sleep=lambda _s: None)
+    return HttpClient(router.transport(), retries=2, backoff=0, sleep=lambda _seconds: None)
 
 
-def make_context(router: Router, env: dict[str, str] | None = None, temp_root: Path | None = None) -> Context:
+def make_context(
+    router: Router,
+    env: dict[str, str] | None = None,
+    temp_root: Path | None = None,
+    control: ControlConfig | None = None,
+) -> Context:
     http = make_http(router)
     environment = env or {}
+    control_config = control or ControlConfig()
     logs: list[str] = []
     ctx = Context(
         http=http,
-        providers=create_source_providers(http, environment),
+        providers=create_source_providers(http, build_host_registry(control_config, environment)),
         env=environment,
+        control=control_config,
         log=logs.append,
         temp_root=temp_root,
         max_download_bytes=10 * 1024 * 1024,
@@ -111,13 +123,13 @@ def github_releases(router: Router, releases: list[GitHubRelease], repo_api: str
     """Register list + by-tag endpoints and asset downloads (API URL -> 302 -> CDN)."""
     items = []
     asset_id = 0
-    for rel in releases:
+    for release in releases:
         assets = []
-        for name, body in rel.files.items():
+        for name, body in release.files.items():
             asset_id += 1
             data = body.encode() if isinstance(body, str) else body
             api_url = f"{repo_api}/releases/assets/{asset_id}"
-            cdn = f"https://release-assets.githubusercontent.com/{repo_api.rsplit('/', 1)[-1]}/{rel.tag}/{asset_id}"
+            cdn = f"https://release-assets.githubusercontent.com/{repo_api.rsplit('/', 1)[-1]}/{release.tag}/{asset_id}"
             router.redirect(api_url, cdn + "?sig=SIGNED")
             router.bytes(cdn, data)
             assets.append(
@@ -126,20 +138,20 @@ def github_releases(router: Router, releases: list[GitHubRelease], repo_api: str
                     "url": api_url,
                     "size": len(data),
                     "state": "uploaded",
-                    "digest": f"sha256:{sha256(data)}" if rel.digests else None,
+                    "digest": f"sha256:{sha256(data)}" if release.digests else None,
                 }
             )
         item = {
-            "tag_name": rel.tag,
-            "draft": rel.draft,
-            "prerelease": rel.prerelease,
-            "html_url": f"https://github.com/acme/widget/releases/tag/{rel.tag}",
-            "body": rel.notes,
+            "tag_name": release.tag,
+            "draft": release.draft,
+            "prerelease": release.prerelease,
+            "html_url": f"https://github.com/acme/widget/releases/tag/{release.tag}",
+            "body": release.notes,
             "published_at": "2026-09-01T00:00:00Z",
             "assets": assets,
         }
         items.append(item)
-        router.json(f"{repo_api}/releases/tags/{rel.tag}", item)
+        router.json(f"{repo_api}/releases/tags/{release.tag}", item)
     router.json(f"{repo_api}/releases", items)
 
 
@@ -194,8 +206,8 @@ class GitSetup:
         return self.remote.as_uri()
 
     def branches(self) -> list[str]:
-        out = git(self.remote, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
-        return sorted(out.split())
+        listing = git(self.remote, "for-each-ref", "--format=%(refname:short)", "refs/heads/")
+        return sorted(listing.split())
 
     def show(self, ref: str, path: str) -> str:
         return git(self.remote, "show", f"{ref}:{path}")
@@ -235,7 +247,10 @@ def commit_all(work: Path, message: str = "init") -> None:
 
 @dataclass
 class FakeTarget(TargetProvider):
+    """In-memory change requests over a real (file://) git remote."""
+
     url: str
+    repository: str = "team/ci-tools"
     requests: list[ChangeRequest] = field(default_factory=list)
     descriptions: dict[int, str] = field(default_factory=dict)
     labels: dict[int, tuple[str, ...]] = field(default_factory=dict)
@@ -253,26 +268,27 @@ class FakeTarget(TargetProvider):
         return "main"
 
     def find_by_branch(self, branch: str) -> list[ChangeRequest]:
-        return [r for r in reversed(self.requests) if r.source_branch == branch]
+        return [request for request in reversed(self.requests) if request.source_branch == branch]
 
     def list_open(self, branch_prefix: str, target_branch: str) -> list[ChangeRequest]:
         return [
-            r
-            for r in self.requests
-            if r.state == "open" and r.source_branch.startswith(branch_prefix) and r.target_branch == target_branch
+            request
+            for request in self.requests
+            if request.state == "open"
+            and request.source_branch.startswith(branch_prefix)
+            and request.target_branch == target_branch
         ]
 
     def create(self, spec: ChangeRequestSpec) -> ChangeRequest:
         if self.fail_create:
-            from toolbot.errors import ToolbotError
-
             raise ToolbotError("TARGET_ERROR", "API down")
-        for r in self.requests:
-            if r.source_branch == spec.source_branch and r.state == "open":
-                return r
+        for request in self.requests:
+            if request.source_branch == spec.source_branch and request.state == "open":
+                return request
+        number = len(self.requests) + 1
         request = ChangeRequest(
-            len(self.requests) + 1,
-            f"https://gitlab.example.com/mr/{len(self.requests) + 1}",
+            number,
+            f"https://gitlab.example.com/{self.repository}/-/merge_requests/{number}",
             "open",
             spec.source_branch,
             spec.target_branch,
@@ -287,23 +303,7 @@ class FakeTarget(TargetProvider):
         self.set_state(request.id, "closed")
         self.comments.setdefault(request.id, []).append(comment)
 
-    def set_state(self, request_id: int, state: str) -> None:
-        for i, r in enumerate(self.requests):
-            if r.id == request_id:
-                self.requests[i] = ChangeRequest(r.id, r.url, state, r.source_branch, r.target_branch, r.title)  # type: ignore[arg-type]
-
-    def open_requests(self) -> list[ChangeRequest]:
-        return [r for r in self.requests if r.state == "open"]
-
-
-def dump(data: Any) -> str:
-    return json.dumps(data)
-
-
-@pytest.fixture
-def no_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    def refuse(*_a: Any, **_k: Any) -> Any:
-        raise AssertionError("unexpected real network access")
-
-    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", refuse)
-    yield
+    def set_state(self, request_id: int, state: State) -> None:
+        for index, request in enumerate(self.requests):
+            if request.id == request_id:
+                self.requests[index] = replace(request, state=state)
