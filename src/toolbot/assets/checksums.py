@@ -32,23 +32,24 @@ def find_expected_digest(content: str, asset_name: str, algorithm: str, checksum
     ``tool.zip`` never matches ``tool.zip.sig``. A missing or conflicting
     entry is an error, never a guess.
     """
-    length = _HEX_LENGTH[algorithm]
+    hex_length = _HEX_LENGTH[algorithm]
     lines = [line.strip() for line in content.splitlines()]
     lines = [line for line in lines if line and not line.startswith("#")]
-    if len(lines) == 1 and re.fullmatch(rf"[0-9a-fA-F]{{{length}}}", lines[0]):
+    if len(lines) == 1 and re.fullmatch(rf"[0-9a-fA-F]{{{hex_length}}}", lines[0]):
         return lines[0].lower()
 
-    gnu = re.compile(rf"^([0-9a-fA-F]{{{length}}}) [ *](.+)$")
-    bsd = re.compile(rf"^{algorithm.upper()} \((.+)\) = ([0-9a-fA-F]{{{length}}})$", re.IGNORECASE)
+    # "<hex>  name" / "<hex> *name" (sha256sum) and "SHA256 (name) = <hex>" (BSD)
+    sha256sum_line = re.compile(rf"^([0-9a-fA-F]{{{hex_length}}}) [ *](.+)$")
+    bsd_line = re.compile(rf"^{algorithm.upper()} \((.+)\) = ([0-9a-fA-F]{{{hex_length}}})$", re.IGNORECASE)
     found: list[str] = []
     for line in lines:
-        if m := gnu.match(line):
-            hex_digest, name = m.group(1), m.group(2)
-        elif m := bsd.match(line):
-            name, hex_digest = m.group(1), m.group(2)
+        if sha256sum_match := sha256sum_line.match(line):
+            hex_digest, file_name = sha256sum_match.group(1), sha256sum_match.group(2)
+        elif bsd_match := bsd_line.match(line):
+            file_name, hex_digest = bsd_match.group(1), bsd_match.group(2)
         else:
             continue
-        if name.removeprefix("./") == asset_name:
+        if file_name.removeprefix("./") == asset_name:
             found.append(hex_digest.lower())
     if not found:
         raise ToolbotError("CHECKSUM_UNAVAILABLE", f'{checksum_file} has no {algorithm} entry for "{asset_name}"')

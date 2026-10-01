@@ -18,7 +18,7 @@ def check_template(template: str, allowed: Sequence[str]) -> list[str]:
     for match in _PLACEHOLDER.finditer(template):
         name = match.group(1)
         if name not in allowed:
-            permitted = ", ".join(f"{{{a}}}" for a in allowed) or "none"
+            permitted = ", ".join(f"{{{allowed_name}}}" for allowed_name in allowed) or "none"
             problems.append(f'unknown placeholder "{{{name}}}" (allowed: {permitted})')
     if re.search(r"[{}]", _PLACEHOLDER.sub("", template)):
         problems.append('unbalanced "{" or "}"')

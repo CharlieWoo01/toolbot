@@ -18,7 +18,9 @@ Two schemes, both backed by mature libraries rather than hand-written rules:
 
 from __future__ import annotations
 
+import operator
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import total_ordering
 from typing import Any
@@ -99,22 +101,22 @@ def tag_for(version: str, template: str) -> str:
 
 
 _CONSTRAINT = re.compile(r"^\s*(==|!=|>=|<=|>|<)?\s*([0-9A-Za-z][0-9A-Za-z.+_-]*)\s*$")
-_OPERATORS = {
-    "==": lambda a, b: a == b,
-    "!=": lambda a, b: a != b,
-    ">=": lambda a, b: a >= b,
-    "<=": lambda a, b: a <= b,
-    ">": lambda a, b: a > b,
-    "<": lambda a, b: a < b,
+_COMPARISONS: dict[str, Callable[[Version, Version], bool]] = {
+    "==": operator.eq,
+    "!=": operator.ne,
+    ">=": operator.ge,
+    "<=": operator.le,
+    ">": operator.gt,
+    "<": operator.lt,
 }
 
 
 def check_constraint(spec: str, scheme: str) -> str | None:
-    """Return a problem description if ``spec`` is not a valid ignore rule."""
+    """Return a problem description if ``spec`` is not a valid constraint."""
     try:
         _parse_constraint(spec, scheme)
-    except ToolbotError as err:
-        return err.message
+    except ToolbotError as error:
+        return error.message
     return None
 
 
@@ -123,20 +125,22 @@ def matches(version: Version, spec: str) -> bool:
 
     ``"0.9.0"`` (exact), ``">=2.0.0"``, ``">=1.4.0, <1.5.0"``.
     """
-    return all(_OPERATORS[op](version, bound) for op, bound in _parse_constraint(spec, version.scheme))
+    return all(
+        _COMPARISONS[comparison](version, bound) for comparison, bound in _parse_constraint(spec, version.scheme)
+    )
 
 
 def _parse_constraint(spec: str, scheme: str) -> list[tuple[str, Version]]:
-    parts = [p for p in spec.split(",")]
-    if not spec.strip() or any(not p.strip() for p in parts):
+    parts = spec.split(",")
+    if not spec.strip() or any(not part.strip() for part in parts):
         raise ToolbotError("VERSION_INVALID", f'"{spec}" is not a valid version constraint')
     result: list[tuple[str, Version]] = []
     for part in parts:
-        m = _CONSTRAINT.match(part)
-        if not m:
+        constraint = _CONSTRAINT.match(part)
+        if not constraint:
             raise ToolbotError(
                 "VERSION_INVALID",
                 f'"{spec}" is not a valid version constraint (use e.g. "1.2.3", ">=2.0.0" or ">=1.4, <1.5")',
             )
-        result.append((m.group(1) or "==", parse_version(m.group(2), scheme)))
+        result.append((constraint.group(1) or "==", parse_version(constraint.group(2), scheme)))
     return result
