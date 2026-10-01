@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://toolbot.invalid/schema/toolbot.schema.json",
+  "title": "Toolbot control configuration",
+  "description": "toolbot.yaml of a control repository. Editor aid only: `toolbot validate` is authoritative.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "hosts": {
+      "type": "object",
+      "description": "GitHub/GitLab instances, by name. github (github.com) and gitlab (gitlab.com) exist by default.",
+      "propertyNames": { "pattern": "^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "url"],
+        "properties": {
+          "type": { "enum": ["github", "gitlab"] },
+          "url": { "type": "string", "description": "https base URL, e.g. https://gitlab.example.com" },
+          "token-env": {
+            "type": "string",
+            "pattern": "^[A-Z_][A-Z0-9_]*$",
+            "description": "NAME of the environment variable holding this host's token (never the token)."
+          }
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "base-branch": { "type": "string" },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "git-author": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "email"],
+          "properties": { "name": { "type": "string" }, "email": { "type": "string" } }
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "description": "Applied in order on top of each tool.yaml. Later rules win for enabled/prereleases; ignore and allow accumulate.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tools": { "$ref": "#/$defs/globs", "description": "Tool name globs (default: all)." },
+          "repositories": { "$ref": "#/$defs/globs", "description": "Repository path globs (default: all)." },
+          "enabled": { "type": "boolean" },
+          "prereleases": { "type": "boolean" },
+          "ignore": { "$ref": "#/$defs/globs" },
+          "allow": { "$ref": "#/$defs/globs" }
+        }
+      }
+    },
+    "targets": {
+      "type": "object",
+      "description": "Named target sets; each schedule runs one with --targets <name>.",
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["host"],
+          "oneOf": [{ "required": ["repository"] }, { "required": ["group"] }],
+          "properties": {
+            "host": { "type": "string" },
+            "repository": { "type": "string", "description": "One repository, e.g. team/ci-tools." },
+            "group": {
+              "type": "string",
+              "description": "All repositories of a GitLab group (incl. subgroups) or GitHub organisation/user that contain tools/."
+            },
+            "include": { "$ref": "#/$defs/globs" },
+            "exclude": { "$ref": "#/$defs/globs" },
+            "base-branch": { "type": "string" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "globs": {
+      "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }]
+    }
+  }
+}
