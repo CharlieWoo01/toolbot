@@ -54,6 +54,10 @@ Downloads, verifies (and extracts) a tool's assets into the working tree, bumps 
 | `toolbot update TOOL --latest` | The newest acceptable release |
 | `toolbot update TOOL --version V` | Version `V` |
 
+### `toolbot fetch [TOOL…]`
+
+Downloads files stored with `storage: fetch` (too large to commit), verifies them like an update does, and requires the SHA-256 recorded in `tool.lock.json`. Files already present with the right hash are skipped. Run it before using such tools, e.g. at the start of a CI job.
+
 ## Automation
 
 ### `toolbot check [TOOL…] [--targets SET] [--dry-run] [--base BRANCH]`

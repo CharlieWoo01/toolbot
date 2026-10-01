@@ -14,6 +14,7 @@ from toolbot.config.models import ToolDefinition
 from toolbot.errors import ToolbotError
 from toolbot.lock import read_lock
 from toolbot.paths import destination_path, repo_relative
+from toolbot.storage import ATTRIBUTES_FILE, attributes_line, is_lfs_pointer
 from toolbot.version_files import check_version_files
 from toolbot.versions import tag_for
 
@@ -57,9 +58,28 @@ def verify_tool(root: Path, tool: ToolDefinition) -> list[str]:
             problems.append(f'asset "{asset.id}" destination changed to {expected_destination} ({hint})')
             continue
         committed_file = root.joinpath(*locked.destination.split("/"))
+        if locked.storage == "lfs" and not _tracked_by_lfs(committed_file):
+            problems.append(f'asset "{asset.id}": {locked.destination} is not tracked by Git LFS ({hint})')
+        if locked.storage == "fetch" and not committed_file.is_file():
+            continue  # not committed; `toolbot fetch` restores and verifies it
         if not committed_file.is_file():
             problems.append(f'asset "{asset.id}": {locked.destination} is missing ({hint})')
+        elif locked.storage == "lfs" and is_lfs_pointer(committed_file):
+            problems.append(
+                f'asset "{asset.id}": {locked.destination} is a Git LFS pointer; fetch LFS content first '
+                '("git lfs pull", or actions/checkout with lfs: true)'
+            )
         elif hash_file(committed_file, "sha256") != locked.sha256:
             problems.append(f'asset "{asset.id}": {locked.destination} does not match the lock file sha256 ({hint})')
     problems.extend(check_version_files(tool))
     return [f"{tool.name}: {problem}" for problem in problems]
+
+
+def _tracked_by_lfs(file: Path) -> bool:
+    """The ``.gitattributes`` line Toolbot writes next to an LFS-stored file is present."""
+    attributes = file.parent / ATTRIBUTES_FILE
+    try:
+        lines = {line.strip() for line in attributes.read_text(encoding="utf-8").splitlines()}
+    except OSError:
+        return False
+    return attributes_line(file) in lines

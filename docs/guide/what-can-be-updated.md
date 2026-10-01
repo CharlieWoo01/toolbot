@@ -48,14 +48,41 @@ assets:
 
 1. The ZIP is downloaded to a private temp folder and its SHA-256 checked against `SHA256SUMS` (upstream checksums cover the archive).
 2. Only `terraform` is read from it and written to a temp file. Paths inside the archive never become local paths, so `../` entries, absolute paths, symlinks and device files can't write anywhere. Symlink members are refused, and the size limit (`TOOLBOT_MAX_DOWNLOAD_MB`) applies to the extracted file too.
-3. `/bin/terraform` is replaced atomically and committed with the executable bit. `tool.lock.json` records `…linux_amd64.zip!terraform` and the SHA-256 of the committed binary.
+3. `/bin/terraform` is replaced atomically and committed with the executable bit (through Git LFS, as it's over 50 MB: see [Large binaries](#large-binaries-terraform-is-120-mb)). `tool.lock.json` records `…linux_amd64.zip!terraform` and the SHA-256 of the committed binary.
 
 zip, tar, tar.gz/.tgz, tar.xz and tar.bz2 are detected from the content. If the member isn't found, the error lists the files in the archive. Several assets may extract different files from the same archive; it's downloaded once.
 
 Prefer committing archives as-is? Leave out `extract`.
 
-!!! warning "Large binaries"
-    Terraform's binary is ~120 MB. GitHub rejects files over 100 MB and gitlab.com limits pushes; self-managed GitLab has its own limits. For big tools, commit the archive, track the destination with Git LFS, or use [version pins only](#version-pins-only).
+## Large binaries (Terraform is ~120 MB)
+
+GitHub rejects files over 100 MB, warns from 50 MB, and every platform limits push sizes. Toolbot handles this automatically. Each asset has a `storage`, default `auto`:
+
+| `storage` | What's committed | Getting the file |
+| --- | --- | --- |
+| `auto` *(default)* | Files up to `defaults.max-file-mb` (50) as normal blobs; bigger ones as `defaults.large-files` | |
+| `git` | The file | `git clone` |
+| `lfs` | A Git LFS pointer; the file goes to the platform's LFS storage | `git clone` with git-lfs (GitLab CI does this by default; GitHub: `actions/checkout` with `lfs: true`) |
+| `fetch` | Nothing; the file is git-ignored and pinned in `tool.lock.json` | `toolbot fetch` |
+
+```yaml
+# toolbot.yaml (optional; these are the defaults)
+defaults:
+  max-file-mb: 50
+  large-files: lfs        # or fetch
+```
+
+**Git LFS** (`lfs`): Toolbot adds `/terraform filter=lfs diff=lfs merge=lfs -text` to the `.gitattributes` next to the file, commits the pointer, and uploads the object itself before pushing the branch. The LFS object id is the file's SHA-256, the same value recorded in `tool.lock.json` and shown in the MR. Nobody needs to run `git lfs track`. The Toolbot image includes git-lfs. LFS must be enabled on the project (it is by default on GitHub and GitLab), and LFS storage counts towards quotas: GitHub's free tier is small, so for big tools updated often, `fetch` may suit better.
+
+**Fetch** (`fetch`): the file is never committed. Toolbot adds `/terraform` to the `.gitignore` next to it, and the lock file pins its SHA-256. Anything that needs the binary runs:
+
+```sh
+toolbot fetch            # every tool; or: toolbot fetch terraform
+```
+
+which downloads it exactly as the update did (same release, checksum file, extraction) and then requires the SHA-256 from `tool.lock.json`, so the file is byte-for-byte the one reviewed in the merge request. Files already present with the right hash aren't downloaded again. In CI, run it as the first step of jobs that use the tool.
+
+Switching between modes, for example when a tool grows past the limit, is handled in the same update. Toolbot moves the file in or out of LFS or the index and adds or removes its own `.gitattributes`/`.gitignore` lines, never anyone else's.
 
 ## Files committed in a repository
 

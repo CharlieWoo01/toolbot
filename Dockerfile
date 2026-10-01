@@ -24,9 +24,10 @@ LABEL org.opencontainers.image.title="toolbot" \
       org.opencontainers.image.version="${TOOLBOT_VERSION}" \
       org.opencontainers.image.revision="${TOOLBOT_REVISION}"
 
-# git is Toolbot's only system dependency (branches, commits, pushes).
+# git is Toolbot's only system dependency (branches, commits, pushes);
+# git-lfs stores files over defaults.max-file-mb with Git LFS.
 RUN apt-get update \
- && apt-get install --yes --no-install-recommends git ca-certificates \
+ && apt-get install --yes --no-install-recommends git git-lfs ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /wheels /wheels

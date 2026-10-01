@@ -39,6 +39,8 @@ jobs:
           TOOLBOT_GITHUB_TOKEN: ${{ steps.app.outputs.token }}
 ```
 
+If any tool is [stored with Git LFS](../guide/what-can-be-updated.md#large-binaries-terraform-is-120-mb), give the verify job's `actions/checkout` `lfs: true` (the template does).
+
 The repository the workflow runs in is the target (from `GITHUB_REPOSITORY`). Toolbot opens **pull requests** from `toolbot/<tool>/<version>` branches, with the same lifecycle as on GitLab: one active PR per tool, closed PRs are rejections, and human commits are never overwritten.
 
 ### Do I need to publish the Action?

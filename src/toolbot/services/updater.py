@@ -175,9 +175,13 @@ class Updater:
             result.paths,
             messages.commit_message(tool.name, tool.version, version),
             executable=result.executable_paths,
+            lfs=[asset.destination for asset in result.lfs_assets],
+            untrack=result.fetched_paths,
         )
         if commit is None:
             return Outcome(tool.name, "up-to-date", "no changes to commit", tool.version, version)
+        # LFS objects first: the branch must never point at pointers the server can't resolve.
+        self.repository.push_lfs_objects(worktree.path, [asset.sha256 for asset in result.lfs_assets])
         self.repository.push(worktree.path, branch, expected_head)
 
         spec = ChangeRequestSpec(

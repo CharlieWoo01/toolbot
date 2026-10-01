@@ -32,7 +32,7 @@ toolbot check ── source provider (GitHub / GitLab releases or tags, any inst
         └── create merge/pull request, supersede older Toolbot requests for the tool
 ```
 
-What a tool update can be: a release asset, a file from a download site, **the binary inside a ZIP/tar.gz**, a file committed in another repository, or **just version pins** (`.terraform-version`, a Dockerfile `ARG`), anywhere in the repository. See [What can be updated](docs/guide/what-can-be-updated.md).
+What a tool update can be: a release asset, a file from a download site, **the binary inside a ZIP/tar.gz**, a file committed in another repository, or **just version pins** (`.terraform-version`, a Dockerfile `ARG`), anywhere in the repository. Files too big for a plain commit (Terraform is ~120 MB) automatically go through **Git LFS**, or aren't committed at all and are restored with `toolbot fetch`. See [What can be updated](docs/guide/what-can-be-updated.md).
 
 - **One active update per tool.** A newer release supersedes the open MR instead of piling up MRs.
 - **Idempotent.** Re-runs find the existing MR by its deterministic branch and do nothing.
@@ -60,6 +60,7 @@ toolbot update pact-broker-cli --latest   # apply to the working tree (no git)
 | `toolbot outdated [--json]` | Current vs latest per tool |
 | `toolbot targets [--targets SET]` | Repositories a target set in `toolbot.yaml` covers |
 | `toolbot update TOOL [--version V \| --latest]` | Fetch, verify and install into the working tree |
+| `toolbot fetch [TOOL…]` | Restore large files that aren't committed (`storage: fetch`), verified against the lock files |
 | `toolbot check [TOOL…] [--targets SET] [--dry-run]` | Full lifecycle: branch, commit, push, merge/pull request |
 
 ## A tool definition

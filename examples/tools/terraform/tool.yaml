@@ -11,6 +11,10 @@
 #     SHA256SUMS file (which lists the ZIPs), then only the `terraform`
 #     binary inside it is committed (`extract`).
 #   * Linux binaries get the executable bit in git (no file extension).
+#   * The binaries are ~120 MB, over GitHub's 100 MB limit: with the default
+#     `storage: auto` Toolbot commits them through Git LFS automatically
+#     (or not at all, restored by `toolbot fetch`, with
+#     `defaults.large-files: fetch` in toolbot.yaml).
 #
 # Upstream:
 #   versions   https://github.com/hashicorp/terraform/releases   (v1.16.4, v1.17.0-beta2 …)

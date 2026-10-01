@@ -39,6 +39,8 @@ hosts:
 defaults:
   labels: [toolbot, tool-update]
   git-author: { name: Toolbot, email: toolbot@example.com }
+  max-file-mb: 50                          # bigger files aren't plain commits…
+  large-files: lfs                         # …but Git LFS (or fetch)
 
 rules:
   - repositories: ["platform/legacy-*"]

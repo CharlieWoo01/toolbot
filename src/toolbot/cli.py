@@ -24,6 +24,7 @@ from toolbot.errors import ToolbotError
 from toolbot.services.artifacts import apply_version
 from toolbot.services.context import Context, create_context
 from toolbot.services.discovery import discover
+from toolbot.services.fetch import fetch_tool
 from toolbot.services.runner import RepositoryResult, check_repositories
 from toolbot.services.targets import TargetRepository, environment_target, resolve_targets
 from toolbot.services.updater import FAILURE_STATUSES, Outcome, plan_local
@@ -77,6 +78,11 @@ def build_parser() -> argparse.ArgumentParser:
     targets_command.add_argument("--targets", dest="target_set", metavar="SET", help='target set name, or "all"')
     targets_command.add_argument("--json", action="store_true", help="machine-readable output")
 
+    fetch_command = commands.add_parser(
+        "fetch", help="download files stored with storage: fetch and verify them against the lock files"
+    )
+    fetch_command.add_argument("tools", nargs="*", metavar="TOOL")
+
     update_command = commands.add_parser(
         "update", help="download, verify and install a tool's assets into the working tree (no Git)"
     )
@@ -115,6 +121,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "verify": _verify,
         "outdated": _outdated,
         "targets": _targets,
+        "fetch": _fetch,
         "update": _update,
         "check": _check,
     }
@@ -274,6 +281,21 @@ def _targets(ctx: Context, root: Path, arguments: argparse.Namespace) -> int:
     for problem in resolution.problems:
         ctx.log(f"error: {problem}")
     return EXIT_FAILURES if resolution.problems else EXIT_OK
+
+
+def _fetch(ctx: Context, root: Path, arguments: argparse.Namespace) -> int:
+    loaded = load_all(root, ctx.providers, arguments.tools or None)
+    problems = [error.message for error in loaded.errors.values()]
+    fetched: list[str] = []
+    for tool in loaded.tools:
+        try:
+            fetched += fetch_tool(ctx, root, tool)
+        except ToolbotError as error:
+            problems.append(f"{tool.name}: {error.message}")
+    for problem in problems:
+        ctx.log(f"error: {problem}")
+    print(f"fetched {len(fetched)} file(s), {len(problems)} problem(s)")
+    return EXIT_FAILURES if problems else EXIT_OK
 
 
 def _update(ctx: Context, root: Path, arguments: argparse.Namespace) -> int:

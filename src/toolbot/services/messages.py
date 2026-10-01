@@ -75,6 +75,14 @@ def description(tool: ToolDefinition, result: ApplyResult, superseding: list[str
         )
     if not result.assets:
         lines = lines[:-4]  # version pins only: no assets table
+    if lfs := [asset.destination for asset in result.assets if asset.storage == "lfs"]:
+        lines += ["", "Stored with **Git LFS** (too large for a plain commit): " + ", ".join(f"`{p}`" for p in lfs)]
+    if fetched := [asset.destination for asset in result.assets if asset.storage == "fetch"]:
+        lines += [
+            "",
+            "**Not committed** (too large); pinned in `tool.lock.json` and restored with `toolbot fetch`: "
+            + ", ".join(f"`{path}`" for path in fetched),
+        ]
     if result.version_files:
         lines += ["", "### Version pins", ""]
         lines += [f"- `{path}`" for path in result.version_files]

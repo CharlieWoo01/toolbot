@@ -20,6 +20,8 @@ class PendingFile:
     content: str | None = None
     executable: bool = False
     """Set the executable bits (POSIX; git records it via ``git add --chmod``)."""
+    remove: bool = False
+    """Delete ``destination`` (as part of the same all-or-nothing step)."""
 
 
 def replace_files(files: Sequence[PendingFile], before_place: Callable[[Path], None] | None = None) -> None:
@@ -43,6 +45,8 @@ def replace_files(files: Sequence[PendingFile], before_place: Callable[[Path], N
         for file in files:
             staged_path = file.destination.with_name(f".{file.destination.name}.toolbot-tmp-{suffix}")
             staged.append((file, staged_path))
+            if file.remove:
+                continue
             if file.source_file is not None:
                 shutil.copyfile(file.source_file, staged_path)
             else:
@@ -58,6 +62,8 @@ def replace_files(files: Sequence[PendingFile], before_place: Callable[[Path], N
             done.append((file.destination, backup, False))
             if before_place is not None:
                 before_place(file.destination)
+            if file.remove:
+                continue  # the backup is deleted on success, restored on failure
             os.replace(staged_path, file.destination)
             done[-1] = (file.destination, backup, True)
     except BaseException:

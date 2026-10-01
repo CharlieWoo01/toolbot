@@ -22,6 +22,7 @@ import fnmatch
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Literal, cast
 
 from toolbot.config.fields import (
     Problems,
@@ -36,10 +37,14 @@ from toolbot.hosts import ENVIRONMENT_VARIABLE_NAME, HOST_TYPES, Host, normalise
 from toolbot.versions import check_constraint
 
 CONTROL_FILE = "toolbot.yaml"
+LargeFileMode = Literal["lfs", "fetch"]
 
 CONTROL_KEYS = ("hosts", "defaults", "rules", "targets")
 HOST_KEYS = ("type", "url", "token-env")
-DEFAULTS_KEYS = ("base-branch", "labels", "git-author")
+DEFAULTS_KEYS = ("base-branch", "labels", "git-author", "max-file-mb", "large-files")
+LARGE_FILE_MODES: tuple[LargeFileMode, ...] = ("lfs", "fetch")
+DEFAULT_MAX_FILE_MB = 50
+"""GitHub warns from 50 MB and rejects files over 100 MB."""
 GIT_AUTHOR_KEYS = ("name", "email")
 RULE_KEYS = ("tools", "repositories", "enabled", "prereleases", "ignore", "allow")
 TARGET_KEYS = ("host", "repository", "group", "include", "exclude", "base-branch")
@@ -86,6 +91,10 @@ class Defaults:
     labels: tuple[str, ...] = ("toolbot", "tool-update")
     git_author_name: str = "Toolbot"
     git_author_email: str = "toolbot@noreply.invalid"
+    max_file_mb: int = DEFAULT_MAX_FILE_MB
+    """Files larger than this are not committed as plain git blobs (``storage: auto``)."""
+    large_files: LargeFileMode = "lfs"
+    """What ``storage: auto`` does with files over ``max_file_mb``."""
 
 
 @dataclass(frozen=True)
@@ -172,6 +181,20 @@ def _validate_defaults(value: object, problems: Problems) -> Defaults:
             email = require_string(author, "email", problems, "defaults.git-author.")
             if name and email:
                 defaults = replace(defaults, git_author_name=name, git_author_email=email)
+    if "max-file-mb" in value:
+        limit = value["max-file-mb"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10_000:
+            problems.append("defaults.max-file-mb: must be a whole number of megabytes, e.g. 50")
+        else:
+            defaults = replace(defaults, max_file_mb=limit)
+    if "large-files" in value:
+        mode = value["large-files"]
+        if mode not in LARGE_FILE_MODES:
+            problems.append(
+                'defaults.large-files: must be "lfs" (Git LFS) or "fetch" (not committed; restored by toolbot fetch)'
+            )
+        else:
+            defaults = replace(defaults, large_files=cast(LargeFileMode, mode))
     return defaults
 
 

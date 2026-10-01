@@ -42,7 +42,22 @@ SAFE_CONFIG = {
     "credential.helper": "",
     "core.fsmonitor": "false",
     "advice.detachedHead": "false",
+    # Git LFS: never ask the server about file locks while pushing.
+    "lfs.locksVerify": "false",
 }
+# The LFS clean filter, enabled only for commits that add LFS files. Checkouts
+# never download LFS content (GIT_LFS_SKIP_SMUDGE): unchanged LFS files stay
+# pointers in Toolbot's worktree and are committed back unchanged.
+LFS_FILTER_ARGUMENTS = (
+    "-c",
+    "filter.lfs.clean=git-lfs clean -- %f",
+    "-c",
+    "filter.lfs.smudge=git-lfs smudge --skip -- %f",
+    "-c",
+    "filter.lfs.process=git-lfs filter-process --skip",
+    "-c",
+    "filter.lfs.required=true",
+)
 _TRAILER = re.compile(r"^([A-Za-z][A-Za-z0-9-]*):\s*(.*)$")
 
 
@@ -114,16 +129,36 @@ class Git:
         except FileNotFoundError:
             raise ToolbotError("GIT_ERROR", "git is not installed or not on PATH") from None
         except subprocess.TimeoutExpired:
-            raise ToolbotError("GIT_ERROR", f"git {arguments[0]} timed out") from None
+            raise ToolbotError("GIT_ERROR", f"git {_command_name(arguments)} timed out") from None
         if completed.returncode not in ok_codes:
             detail = self._redact((completed.stderr or completed.stdout).strip()) or f"exit code {completed.returncode}"
-            raise ToolbotError("GIT_ERROR", f"git {arguments[0]} failed: {detail}")
+            raise ToolbotError("GIT_ERROR", f"git {_command_name(arguments)} failed: {detail}")
         return completed.stdout
 
     def _redact(self, text: str) -> str:
         for secret in self._secrets:
             text = text.replace(secret, "***")
         return text
+
+
+def _command_name(arguments: Sequence[str]) -> str:
+    """``add`` for ``-c key=value add …``; ``lfs push`` for LFS commands."""
+    index = 0
+    while index < len(arguments) - 1 and arguments[index] == "-c":
+        index += 2
+    command = arguments[index] if index < len(arguments) else "?"
+    return f"lfs {arguments[index + 1]}" if command == "lfs" and index + 1 < len(arguments) else command
+
+
+def require_git_lfs(git: Git) -> None:
+    try:
+        git.run("lfs", "version")
+    except ToolbotError:
+        raise ToolbotError(
+            "GIT_ERROR",
+            "a file is stored with Git LFS but git-lfs is not installed (the Toolbot image includes it); "
+            "install git-lfs, or set storage: fetch / defaults.large-files: fetch",
+        ) from None
 
 
 def check_branch_name(branch: str) -> None:
@@ -158,6 +193,7 @@ class Repository:
             cwd,
             config={**SAFE_CONFIG, **(self._auth.config() if self._auth else {})},
             env={
+                "GIT_LFS_SKIP_SMUDGE": "1",
                 "GIT_AUTHOR_NAME": self.identity.name,
                 "GIT_AUTHOR_EMAIL": self.identity.email,
                 "GIT_COMMITTER_NAME": self.identity.name,
@@ -207,6 +243,15 @@ class Repository:
         lease = f"--force-with-lease=refs/heads/{branch}:{expected or ''}"
         self._git(cwd).run("push", "--quiet", lease, self.remote_url, f"HEAD:refs/heads/{branch}")
 
+    def push_lfs_objects(self, cwd: Path, object_ids: Sequence[str]) -> None:
+        """Upload Git LFS objects (by SHA-256) before pushing the commit that points to them.
+
+        Hooks are disabled for Toolbot's git, so LFS's pre-push hook never runs;
+        uploading explicitly by id is deterministic and needs no history walk.
+        """
+        if object_ids:
+            self._git(cwd).run("lfs", "push", "--object-id", self.remote_url, *object_ids)
+
     def delete_branch(self, branch: str, expected: str) -> None:
         lease = f"--force-with-lease=refs/heads/{branch}:{expected}"
         self.git.run("push", "--quiet", lease, self.remote_url, f":refs/heads/{branch}")
@@ -239,13 +284,33 @@ class Worktree:
         self.git.run("checkout", "--quiet", "--force", "-B", branch, commit)
         self.git.run("clean", "-ffdxq")
 
-    def commit(self, paths: Sequence[str], message: str, executable: Sequence[str] = ()) -> str | None:
-        """Stage ``paths`` (``executable`` ones with mode 755, also on Windows where
-        the filesystem has no such bit) and commit. Returns the commit, or None if
-        nothing changed."""
-        self.git.run("add", "--all", "--", *paths)
+    def commit(
+        self,
+        paths: Sequence[str],
+        message: str,
+        executable: Sequence[str] = (),
+        lfs: Sequence[str] = (),
+        untrack: Sequence[str] = (),
+    ) -> str | None:
+        """Stage ``paths`` and commit. Returns the commit, or None if nothing changed.
+
+        ``executable`` files get mode 755 (also on Windows, where the filesystem
+        has no such bit); ``lfs`` files are stored as Git LFS pointers (their
+        ``.gitattributes`` must be among ``paths``); ``untrack`` files are
+        removed from the index but kept on disk (now git-ignored).
+        """
+        if untrack:
+            self.git.run("rm", "--cached", "--quiet", "--ignore-unmatch", "--", *untrack)
+        filter_arguments: tuple[str, ...] = ()
+        if lfs:
+            require_git_lfs(self.git)
+            filter_arguments = LFS_FILTER_ARGUMENTS
+        self.git.run(*filter_arguments, "add", "--all", "--", *paths)
+        if lfs:
+            # Files committed as plain blobs before (or unchanged since) need re-cleaning.
+            self.git.run(*filter_arguments, "add", "--renormalize", "--", *lfs)
         if executable:
-            self.git.run("add", "--chmod=+x", "--", *executable)
+            self.git.run(*filter_arguments, "add", "--chmod=+x", "--", *executable)
         if not self.git.run("diff", "--cached", "--name-only").strip():
             return None
         self.git.run("commit", "--quiet", "--file=-", stdin=message)

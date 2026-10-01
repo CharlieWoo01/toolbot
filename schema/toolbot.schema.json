@@ -31,6 +31,17 @@
       "properties": {
         "base-branch": { "type": "string" },
         "labels": { "type": "array", "items": { "type": "string" } },
+        "max-file-mb": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 50,
+          "description": "Files larger than this are not committed as plain git blobs (assets with storage: auto)."
+        },
+        "large-files": {
+          "enum": ["lfs", "fetch"],
+          "default": "lfs",
+          "description": "lfs: commit through Git LFS. fetch: don't commit; pin in tool.lock.json and restore with `toolbot fetch`."
+        },
         "git-author": {
           "type": "object",
           "additionalProperties": false,

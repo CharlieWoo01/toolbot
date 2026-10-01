@@ -28,6 +28,7 @@ from toolbot.config.models import (
     ChecksumAlgorithm,
     ChecksumConfig,
     SourceConfig,
+    StorageMode,
     ToolDefinition,
     VersionFile,
     VersionSource,
@@ -54,7 +55,8 @@ TOOL_KEYS = (
 )
 SOURCE_KEYS = ("provider", "repository", "host", "versions")
 VERSION_SOURCES: tuple[VersionSource, ...] = ("releases", "tags")
-ASSET_KEYS = ("name", "pattern", "url", "path", "extract", "destination", "executable", "checksum")
+ASSET_KEYS = ("name", "pattern", "url", "path", "extract", "destination", "executable", "storage", "checksum")
+STORAGE_MODES: tuple[StorageMode, ...] = ("auto", "git", "lfs", "fetch")
 MATCHER_KEYS = ("name", "pattern", "url", "path")
 CHECKSUM_KEYS = ("type", "file", "url", "path", "algorithm")
 CHECKSUM_TYPES = ("none", "provider", "file")
@@ -370,8 +372,25 @@ def _validate_assets(
         executable = optional_bool(entry, "executable", f"{where}.", problems)
         if executable is None and destination is not None:
             executable = _looks_executable(destination)
+        storage = entry.get("storage", "auto")
+        if storage not in STORAGE_MODES:
+            problems.append(
+                f"{where}.storage: must be one of {', '.join(STORAGE_MODES)} "
+                "(auto: git up to defaults.max-file-mb, then defaults.large-files)"
+            )
+            storage = "auto"
         if matcher is not None and destination is not None:
-            assets.append(AssetConfig(str(asset_id), matcher, destination, checksum, extract, bool(executable)))
+            assets.append(
+                AssetConfig(
+                    str(asset_id),
+                    matcher,
+                    destination,
+                    checksum,
+                    extract,
+                    bool(executable),
+                    cast(StorageMode, storage),
+                )
+            )
     _check_asset_collisions(assets, problems)
     return assets
 

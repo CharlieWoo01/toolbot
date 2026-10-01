@@ -32,6 +32,7 @@
 | `destination` | Repository-relative path of the committed file (inside or outside `tools/`) |
 | `size`, `sha256` | Of the committed file (the extracted file, for archives) |
 | `verifiedBy` | `sha256:<checksum file, URL or path>`, `sha512:…`, `provider-digest` or `none` |
+| `storage` | `lfs` (Git LFS) or `fetch` (not committed; `toolbot fetch` restores it and checks `sha256`). Omitted for plain git. |
 
 A tool with only `version-files` has a lock file with no assets; `toolbot verify` checks its pins instead.
 

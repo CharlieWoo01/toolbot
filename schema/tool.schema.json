@@ -131,6 +131,11 @@
           "type": "string",
           "description": "Path relative to tools/<name>/, or to the repository root with a leading \"/\" (e.g. \"/bin/terraform\")."
         },
+        "storage": {
+          "enum": ["auto", "git", "lfs", "fetch"],
+          "default": "auto",
+          "description": "auto: plain git up to defaults.max-file-mb (toolbot.yaml, default 50), otherwise defaults.large-files. lfs: Git LFS. fetch: not committed; pinned in tool.lock.json and restored by `toolbot fetch`."
+        },
         "executable": {
           "type": "boolean",
           "description": "Commit with the executable bit. Default: true when the destination has no extension (or is .sh/.bash/.py)."

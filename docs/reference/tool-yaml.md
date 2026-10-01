@@ -50,6 +50,7 @@ Plus:
 | --- | --- | --- |
 | `destination` | ✅ | Where the file is committed: relative to `tools/<name>/`, or to the **repository root** with a leading `/` (e.g. `/bin/terraform`). `/`-separated; each segment starts with a letter or digit. |
 | `extract` | | The download is an archive (zip, tar, tar.gz/.tgz, tar.xz, tar.bz2, detected from content): commit only this file from it, e.g. `terraform` or `linux-amd64/helm`. The checksum is verified on the archive first. Placeholders `{version}`, `{tag}`. |
+| `storage` | | `auto` (default): plain git up to `defaults.max-file-mb` in `toolbot.yaml` (50), otherwise `defaults.large-files`. `git`, `lfs` (Git LFS) or `fetch` (not committed; restored by `toolbot fetch`). See [Large binaries](../guide/what-can-be-updated.md#large-binaries-terraform-is-120-mb). |
 | `executable` | | Commit with the executable bit (mode `100755`, also from Windows). Default: `true` when the destination has no extension or ends in `.sh`/`.bash`/`.py`. |
 | `checksum` | | Overrides the tool-level `checksum`. |
 

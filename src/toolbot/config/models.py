@@ -12,6 +12,10 @@ from typing import Literal
 
 ChecksumAlgorithm = Literal["sha256", "sha512"]
 VersionSource = Literal["releases", "tags"]
+StorageMode = Literal["auto", "git", "lfs", "fetch"]
+"""How a committed asset is stored. ``auto``: plain git up to the size limit
+(``defaults.max-file-mb``), otherwise ``defaults.large-files``."""
+StoredAs = Literal["git", "lfs", "fetch"]
 MatcherKind = Literal["name", "pattern", "url", "path"]
 RELEASE_ASSET_KINDS = ("name", "pattern")
 """Matcher kinds that need a platform release (``versions: releases``)."""
@@ -66,6 +70,9 @@ class AssetConfig:
     this member is committed. The checksum is verified on the archive."""
     executable: bool = False
     """Commit with the executable bit (``git add --chmod=+x``)."""
+    storage: StorageMode = "auto"
+    """git: a normal blob; lfs: Git LFS; fetch: not committed, pinned in the
+    lock file and restored by ``toolbot fetch``; auto: decided by size."""
 
 
 @dataclass(frozen=True)

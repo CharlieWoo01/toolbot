@@ -26,6 +26,14 @@ class LockedAsset:
     size: int
     sha256: str
     verifiedBy: str
+    storage: str = "git"
+    """``git`` (omitted from the file), ``lfs`` or ``fetch`` (not committed)."""
+
+    def as_json(self) -> dict[str, Any]:
+        data = asdict(self)
+        if self.storage == "git":
+            del data["storage"]
+        return data
 
 
 @dataclass(frozen=True)
@@ -44,7 +52,7 @@ class LockFile:
             "version": self.version,
             "tag": self.tag,
             "source": self.source,
-            "assets": {asset_id: asdict(asset) for asset_id, asset in sorted(self.assets.items())},
+            "assets": {asset_id: asset.as_json() for asset_id, asset in sorted(self.assets.items())},
         }
         return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 

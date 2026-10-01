@@ -18,6 +18,9 @@ run "$image" toolbot --version
 step "git is available"
 run "$image" git --version
 
+step "git-lfs is available"
+run "$image" git lfs version
+
 step "runs as an unprivileged user"
 uid=$(run "$image" id -u)
 [ "$uid" != "0" ] || { echo "image runs as root" >&2; exit 1; }

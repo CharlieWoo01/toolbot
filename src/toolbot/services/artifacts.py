@@ -3,7 +3,8 @@
 Resolves the release's assets, downloads every one into a private temp
 directory, verifies checksums (of the archive, for ``extract``), extracts
 archive members, and only then replaces the committed artifacts, version
-pins in ``version-files``, the lock file and (if the version changed)
+pins in ``version-files``, LFS/ignore markers for large files
+(``toolbot.storage``), the lock file and (if the version changed)
 ``tool.yaml`` in one rollback-safe step. Any failure before that leaves the
 tree untouched; temp files are always removed.
 
@@ -17,13 +18,14 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from toolbot.assets.archives import extract_member
 from toolbot.assets.checksums import assert_digest, find_expected_digest, hash_file
 from toolbot.assets.install import PendingFile, replace_files
 from toolbot.assets.matching import ResolvedAsset, file_name_from_url, resolve_assets
 from toolbot.config.loader import load_tool, with_version
-from toolbot.config.models import ToolDefinition
+from toolbot.config.models import StoredAs, ToolDefinition
 from toolbot.config.placeholders import render
 from toolbot.errors import ToolbotError
 from toolbot.http import HttpRequest
@@ -31,10 +33,9 @@ from toolbot.lock import LockedAsset, LockFile, describe_verification, lock_path
 from toolbot.paths import TOOLS_DIR, repo_relative, resolve_destination
 from toolbot.providers.source.base import Release, SourceProvider
 from toolbot.services.context import Context
+from toolbot.storage import choose_storage, is_lfs_pointer, marker_updates
 from toolbot.version_files import bump_version_files
 from toolbot.versions import parse_version, tag_for
-
-GIT_LFS_POINTER = b"version https://git-lfs.github.com/spec/"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class AppliedAsset:
     sha256: str
     verified_by: str
     executable: bool = False
+    storage: StoredAs = "git"
 
 
 @dataclass
@@ -61,17 +63,34 @@ class ApplyResult:
     """Repository-relative files whose content changed."""
     version_files: list[str] = field(default_factory=list)
     """Repository-relative version files that were rewritten."""
+    markers: list[str] = field(default_factory=list)
+    """``.gitattributes``/``.gitignore`` files changed for LFS / fetch storage."""
 
     @property
     def paths(self) -> list[str]:
-        """Everything this update may touch, repository-relative (what gets committed)."""
-        touched = [f"{TOOLS_DIR}/{self.tool.name}"]
-        touched += [asset.destination for asset in self.assets if not asset.destination.startswith(touched[0] + "/")]
-        return touched + self.version_files
+        """Everything this update may commit, repository-relative. Files stored with
+        ``fetch`` are left out: they are git-ignored and never committed."""
+        tool_dir = f"{TOOLS_DIR}/{self.tool.name}"
+        outside = [
+            asset.destination
+            for asset in self.assets
+            if not asset.destination.startswith(tool_dir + "/") and asset.storage != "fetch"
+        ]
+        markers = [marker for marker in self.markers if not marker.startswith(tool_dir + "/")]
+        return [tool_dir, *outside, *self.version_files, *markers]
 
     @property
     def executable_paths(self) -> list[str]:
-        return [asset.destination for asset in self.assets if asset.executable]
+        return [asset.destination for asset in self.assets if asset.executable and asset.storage != "fetch"]
+
+    @property
+    def lfs_assets(self) -> list[AppliedAsset]:
+        return [asset for asset in self.assets if asset.storage == "lfs"]
+
+    @property
+    def fetched_paths(self) -> list[str]:
+        """Files that must not be (or no longer be) tracked by git."""
+        return [asset.destination for asset in self.assets if asset.storage == "fetch"]
 
 
 @dataclass(frozen=True)
@@ -141,36 +160,25 @@ def apply_version(
 
     temp_dir = Path(tempfile.mkdtemp(prefix="toolbot-", dir=ctx.temp_root))
     try:
-        checksum_cache: dict[str, str] = {}
-        download_cache: dict[str, Path] = {}  # several assets may extract from one archive
+        downloader = AssetDownloader(ctx, tool, provider, release, values, temp_dir)
         downloaded: list[tuple[Path, Path, AppliedAsset]] = []
-        for index, asset in enumerate(resolved_assets):
-            request = asset_download_request(ctx, provider, tool, release, asset)
-            what = f'asset "{asset.config.id}" ({asset.upstream.name}) of {release_label}'
-            download = download_cache.get(request.url)
-            if download is None:
-                download = temp_dir / f"download-{index}"
-                ctx.http.download(request, download, what, ctx.max_download_bytes, provider.auth_hint(tool.source))
-                if asset.from_repository:
-                    _reject_lfs_pointer(download, what)
-                download_cache[request.url] = download
-            verified_by = _verify(ctx, tool, provider, release, asset, download, values, checksum_cache)
-            committed_file = download
-            if asset.extract:
-                committed_file = temp_dir / f"extracted-{index}"
-                extract_member(download, asset.extract, committed_file, ctx.max_download_bytes, what)
+        for asset in resolved_assets:
+            committed_file, verified_by = downloader.fetch(asset)
             destination = destinations[asset.config.id]
+            size = committed_file.stat().st_size
             applied = AppliedAsset(
                 id=asset.config.id,
                 upstream=asset.upstream_label,
                 destination=repo_relative(root, destination),
-                size=committed_file.stat().st_size,
+                size=size,
                 sha256=hash_file(committed_file, "sha256"),
                 verified_by=verified_by,
                 executable=asset.config.executable,
+                storage=choose_storage(asset.config.storage, size, ctx.control.defaults),
             )
             downloaded.append((committed_file, destination, applied))
-            ctx.log(f"  {applied.id}: {applied.upstream} ({applied.size} bytes, verified: {verified_by})")
+            stored = "" if applied.storage == "git" else f", stored with {applied.storage}"
+            ctx.log(f"  {applied.id}: {applied.upstream} ({applied.size} bytes, verified: {verified_by}{stored})")
 
         try:
             previous_lock = read_lock(tool)
@@ -183,10 +191,22 @@ def apply_version(
             source={"provider": tool.source.provider, "repository": tool.source.repository, "host": tool.source.host},
             assets={
                 applied.id: LockedAsset(
-                    applied.upstream, applied.destination, applied.size, applied.sha256, applied.verified_by
+                    applied.upstream,
+                    applied.destination,
+                    applied.size,
+                    applied.sha256,
+                    applied.verified_by,
+                    applied.storage,
                 )
                 for _temp, _destination, applied in downloaded
             },
+        )
+        previous_storage: dict[Path, StoredAs] = {
+            root.joinpath(*locked.destination.split("/")): cast(StoredAs, locked.storage)
+            for locked in (previous_lock.assets.values() if previous_lock else ())
+        }
+        markers = marker_updates(
+            previous_storage, {destination: applied.storage for _temp, destination, applied in downloaded}
         )
         pending_files = [
             PendingFile(destination=destination, source_file=temp_file, executable=applied.executable)
@@ -194,6 +214,10 @@ def apply_version(
         ]
         pending_files += [
             PendingFile(destination=change.path, content=change.content) for change in version_file_changes
+        ]
+        pending_files += [
+            PendingFile(destination=marker.path, content=marker.content, remove=marker.content is None)
+            for marker in markers
         ]
         pending_files.append(PendingFile(destination=lock_path(tool), content=lock.serialise()))
         if target_version != tool.version:
@@ -215,6 +239,8 @@ def apply_version(
             if previous_asset is None or previous_asset.sha256 != applied.sha256:
                 changed.append(applied.destination)
         changed += [change.display for change in version_file_changes]
+        marker_paths = [repo_relative(root, marker.path) for marker in markers]
+        changed += marker_paths
         ctx.log(f"toolbot: updated {', '.join(changed)}" if changed else "toolbot: already up to date")
         applied_assets = [applied for _temp, _destination, applied in downloaded]
         return ApplyResult(
@@ -226,20 +252,64 @@ def apply_version(
             applied_assets,
             changed,
             [change.display for change in version_file_changes],
+            marker_paths,
         )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _reject_lfs_pointer(downloaded_file: Path, what: str) -> None:
-    """A Git LFS pointer is a small text file; committing it instead of the binary must not happen."""
-    with downloaded_file.open("rb") as handle:
-        if handle.read(len(GIT_LFS_POINTER)) == GIT_LFS_POINTER:
-            raise ToolbotError(
-                "ASSET_NOT_FOUND",
-                f"{what} is a Git LFS pointer, not the file. GitHub's contents API does not serve LFS content; "
-                'download it by "url" (e.g. a media.githubusercontent.com URL) or publish it as a release asset.',
+class AssetDownloader:
+    """Download → verify → (extract) for one tool and release, in a temp directory.
+
+    Downloads and checksum files are cached, so several assets extracting
+    from one archive download it once.
+    """
+
+    def __init__(
+        self,
+        ctx: Context,
+        tool: ToolDefinition,
+        provider: SourceProvider,
+        release: Release,
+        values: dict[str, str],
+        temp_dir: Path,
+    ) -> None:
+        self.ctx = ctx
+        self.tool = tool
+        self.provider = provider
+        self.release = release
+        self.values = values
+        self.temp_dir = temp_dir
+        self.release_label = f"{provider.id}:{tool.source.repository}@{release.tag}"
+        self._checksums: dict[str, str] = {}
+        self._downloads: dict[str, Path] = {}
+
+    def fetch(self, asset: ResolvedAsset) -> tuple[Path, str]:
+        """The verified file to install, and how it was verified."""
+        request = asset_download_request(self.ctx, self.provider, self.tool, self.release, asset)
+        what = f'asset "{asset.config.id}" ({asset.upstream.name}) of {self.release_label}'
+        download = self._downloads.get(request.url)
+        if download is None:
+            download = self.temp_dir / f"download-{len(self._downloads)}"
+            self.ctx.http.download(
+                request, download, what, self.ctx.max_download_bytes, self.provider.auth_hint(self.tool.source)
             )
+            if asset.from_repository and is_lfs_pointer(download):
+                # A Git LFS pointer is a small text file; installing it instead of the binary must not happen.
+                raise ToolbotError(
+                    "ASSET_NOT_FOUND",
+                    f"{what} is a Git LFS pointer, not the file. GitHub's contents API does not serve LFS content; "
+                    'download it by "url" (e.g. a media.githubusercontent.com URL) or publish it as a release asset.',
+                )
+            self._downloads[request.url] = download
+        verified_by = _verify(
+            self.ctx, self.tool, self.provider, self.release, asset, download, self.values, self._checksums
+        )
+        if not asset.extract:
+            return download, verified_by
+        extracted = self.temp_dir / f"extracted-{asset.config.id}"
+        extract_member(download, asset.extract, extracted, self.ctx.max_download_bytes, what)
+        return extracted, verified_by
 
 
 def _verify(
