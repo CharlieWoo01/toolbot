@@ -1,4 +1,5 @@
-# Toolbot CI template for GitLab projects that keep tools under tools/<name>/.
+# Toolbot CI template for GitLab projects: repositories that keep tools under
+# tools/<name>/, and control repositories with a toolbot.yaml.
 #
 #   include:
 #     - project: platform/toolbot          # wherever the Toolbot project lives
@@ -10,21 +11,20 @@
 #
 # Jobs (both in stage "test"; override `stage:` on the job to move them):
 #   toolbot-verify  merge requests / default branch: validate definitions and
-#                   check committed artifacts match their lock files.
-#   toolbot-check   pipeline schedules (and manual runs) with TOOLBOT_RUN=true:
-#                   find updates and create/update merge requests.
-#                   Set TOOLBOT_CHECK_ARGS=--dry-run to only report.
+#                   toolbot.yaml, check committed artifacts match their lock files.
+#   toolbot-check   pipeline schedules (and manual runs) with TOOLBOT_RUN=true.
+#                   TOOLBOT_CHECK_ARGS adds arguments, e.g. "--dry-run" or
+#                   "--targets nightly" (one schedule per target set).
 #
-# Required CI/CD variable (masked, protected): TOOLBOT_GITLAB_TOKEN
-# Optional: TOOLBOT_GITHUB_TOKEN, TOOLBOT_GITLAB_SOURCE_TOKEN, TOOLBOT_MR_LABELS,
-#           TOOLBOT_GIT_AUTHOR_NAME, TOOLBOT_GIT_AUTHOR_EMAIL, TOOLBOT_BASE_BRANCH.
+# CI/CD variables (masked, protected): TOOLBOT_GITLAB_TOKEN for this project,
+# or the token-env names declared in toolbot.yaml.
 
 variables:
   TOOLBOT_IMAGE:
     description: "Toolbot image, pinned to a version, e.g. registry.example.com/platform/toolbot:0.1.0"
     value: ""
   TOOLBOT_CHECK_ARGS:
-    description: 'Extra arguments for "toolbot check", e.g. "--dry-run" or tool names'
+    description: 'Extra arguments for "toolbot check", e.g. "--dry-run" or "--targets nightly"'
     value: ""
 
 .toolbot:
@@ -39,7 +39,7 @@ toolbot-verify:
     - if: $TOOLBOT_IMAGE == null || $TOOLBOT_IMAGE == ""
       when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event" || $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-      exists: [tools/*/tool.yaml]
+      exists: [tools/*/tool.yaml, toolbot.yaml]
   script:
     - toolbot validate
     - toolbot verify
@@ -50,10 +50,10 @@ toolbot-check:
     # Only schedules/manual runs that opt in, so other schedules are unaffected.
     - if: $CI_PIPELINE_SOURCE == "schedule" && $TOOLBOT_RUN == "true" && $TOOLBOT_IMAGE
     - if: $CI_PIPELINE_SOURCE == "web" && $TOOLBOT_RUN == "true" && $TOOLBOT_IMAGE
-  # Never run two Toolbot instances against the same project at once.
+  # Never run two Toolbot instances from this project at once.
   resource_group: toolbot
   timeout: 1h
   script:
-    # Toolbot fetches the target branch itself; the job checkout is only
-    # read by --dry-run.
+    # Toolbot fetches each target branch itself; the job checkout is only
+    # read for toolbot.yaml and by --dry-run without a target.
     - toolbot check $TOOLBOT_CHECK_ARGS

@@ -1,0 +1,68 @@
+# Toolbot workflow template for GitHub repositories that keep tools under tools/<name>/.
+# Copy to .github/workflows/toolbot.yml and replace "your-org/toolbot@v0.1.0".
+#
+#   pull requests touching tools/   → toolbot validate + verify
+#   schedule / manual run           → toolbot check (opens pull requests)
+#
+# Credentials (Settings → Secrets and variables → Actions):
+#   Recommended: a GitHub App with Contents, Pull requests and Issues read & write,
+#   installed on this repository → variable TOOLBOT_APP_ID + secret TOOLBOT_APP_PRIVATE_KEY.
+#   Pull requests opened with the built-in GITHUB_TOKEN would not trigger this
+#   workflow, so the verify job would never run on them.
+name: Toolbot
+
+on:
+  schedule:
+    - cron: "0 6 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Report only, change nothing
+        type: boolean
+        default: false
+  pull_request:
+    paths: ["tools/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolbot
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: your-org/toolbot@v0.1.0
+        with:
+          args: validate
+      - uses: your-org/toolbot@v0.1.0
+        with:
+          args: verify
+
+  check:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.TOOLBOT_APP_ID }}
+          private-key: ${{ secrets.TOOLBOT_APP_PRIVATE_KEY }}
+      - uses: your-org/toolbot@v0.1.0
+        with:
+          args: ${{ inputs.dry-run && 'check --dry-run' || 'check' }}
+        env:
+          # This repository is the target (detected from GITHUB_REPOSITORY);
+          # the App token pushes branches, opens pull requests and reads GitHub releases.
+          TOOLBOT_GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          # TOOLBOT_GITLAB_SOURCE_TOKEN: ${{ secrets.TOOLBOT_GITLAB_SOURCE_TOKEN }}  # private gitlab.com sources

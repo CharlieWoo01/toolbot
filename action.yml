@@ -1,0 +1,53 @@
+# GitHub Action: run Toolbot in a workflow.
+#
+#   - uses: your-org/toolbot@v0.1.0
+#     with:
+#       args: check --dry-run
+#     env:
+#       TOOLBOT_GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+#
+# Referencing this repository at a tag is all that is needed; publishing to the
+# GitHub Marketplace is optional (only possible for public repositories). For
+# a private/internal Toolbot repository, allow access under
+# Settings → Actions → General → Access.
+name: Toolbot
+description: Keep standalone tools and binaries up to date with automated pull/merge requests.
+author: Toolbot
+branding:
+  icon: package
+  color: green
+
+inputs:
+  args:
+    description: 'Arguments for the toolbot command, e.g. "check", "check --dry-run", "verify", "check --targets nightly"'
+    required: false
+    default: check
+  working-directory:
+    description: Directory containing tools/ or toolbot.yaml
+    required: false
+    default: "."
+  python-version:
+    description: Python version to run Toolbot with
+    required: false
+    default: "3.13"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install Toolbot
+      shell: bash
+      run: python -m pip install --disable-pip-version-check --quiet --constraint "$GITHUB_ACTION_PATH/requirements.lock" "$GITHUB_ACTION_PATH"
+    - name: Run Toolbot
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TOOLBOT_ARGS: ${{ inputs.args }}
+      # Word splitting of TOOLBOT_ARGS is intended ("check --targets nightly");
+      # globbing is disabled so "*" in arguments stays literal.
+      run: |
+        set -f
+        # shellcheck disable=SC2086
+        toolbot $TOOLBOT_ARGS
