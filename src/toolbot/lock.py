@@ -44,7 +44,7 @@ class LockFile:
             "version": self.version,
             "tag": self.tag,
             "source": self.source,
-            "assets": {k: asdict(v) for k, v in sorted(self.assets.items())},
+            "assets": {asset_id: asdict(asset) for asset_id, asset in sorted(self.assets.items())},
         }
         return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
@@ -68,7 +68,7 @@ def read_lock(tool: ToolDefinition) -> LockFile | None:
             version=data["version"],
             tag=data["tag"],
             source=dict(data["source"]),
-            assets={k: LockedAsset(**v) for k, v in data["assets"].items()},
+            assets={asset_id: LockedAsset(**asset) for asset_id, asset in data["assets"].items()},
         )
     except (ValueError, KeyError, TypeError):
         raise ToolbotError("VERIFY_FAILED", f'{path} is corrupt; run "toolbot update {tool.name}"') from None

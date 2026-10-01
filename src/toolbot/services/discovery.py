@@ -1,15 +1,16 @@
 """Finding the newest acceptable release of a tool.
 
-Never trusts a platform's "latest" flag. Every published release is
-considered, and a release is a candidate only if:
+Never trusts a platform's "latest" flag. Every published release (or every
+git tag, with ``source.versions: tags``) is considered, and it is a
+candidate only if:
 
 * it is not a draft / upcoming release;
 * its tag follows the tool's ``tag`` template (other tags, e.g. of other
   components in a monorepo, are ignored);
 * the version parses under the tool's ``versioning`` scheme;
 * it is stable (neither flagged as prerelease by the platform nor carrying a
-  prerelease version such as ``1.0.0-rc.1``), unless ``prereleases: true``;
-* it is not excluded by an ``ignore`` rule.
+  prerelease version such as ``1.0.0-rc.1``), unless prereleases are enabled;
+* it is not excluded by an ``ignore`` rule and satisfies every ``allow`` rule.
 
 The highest candidate by version precedence wins.
 """
@@ -39,8 +40,14 @@ class Discovery:
     tool: ToolDefinition
     current: Version
     latest: Candidate | None
-    ignored: list[str] = field(default_factory=list)
-    """Newer versions skipped because of ``ignore`` rules (for reporting)."""
+    held_back: list[str] = field(default_factory=list)
+    """Newer versions excluded by ``ignore``/``allow``, newest first (for reporting)."""
+
+    def held_back_summary(self, shown: int = 3) -> str:
+        """e.g. ``4.3.0, 4.2.4, 4.2.3 (+12 more)``."""
+        listed = ", ".join(self.held_back[:shown])
+        remaining = len(self.held_back) - shown
+        return f"{listed} (+{remaining} more)" if remaining > 0 else listed
 
     @property
     def status(self) -> Status:
@@ -53,27 +60,36 @@ class Discovery:
         return "ahead"
 
 
+def is_acceptable(tool: ToolDefinition, version: Version) -> bool:
+    """True if ``ignore`` and ``allow`` permit proposing ``version``."""
+    if any(matches(version, constraint) for constraint in tool.ignore):
+        return False
+    return all(matches(version, constraint) for constraint in tool.allow)
+
+
 def discover(ctx: Context, tool: ToolDefinition) -> Discovery:
     current = parse_version(tool.version, tool.versioning)
     provider = ctx.providers.require(tool.source.provider)
     best: Candidate | None = None
-    ignored: list[str] = []
-    for release in provider.list_releases(tool.source):
+    held_back: list[Version] = []
+    tag_prefix = tool.tag.split("{version}", 1)[0]
+    for release in provider.list_releases_or_tags(tool.source, tag_prefix):
         if release.draft:
             continue
-        text = version_from_tag(release.tag, tool.tag)
-        if text is None:
+        version_text = version_from_tag(release.tag, tool.tag)
+        if version_text is None:
             continue
         try:
-            version = parse_version(text, tool.versioning)
+            version = parse_version(version_text, tool.versioning)
         except ToolbotError:
             continue
         if (release.prerelease or version.prerelease) and not tool.prereleases:
             continue
-        if any(matches(version, rule) for rule in tool.ignore):
+        if not is_acceptable(tool, version):
             if version > current:
-                ignored.append(version.raw)
+                held_back.append(version)
             continue
         if best is None or version > best.version:
             best = Candidate(version, release)
-    return Discovery(tool, current, best, ignored)
+    held_back_newest_first = [version.raw for version in sorted(held_back, reverse=True)]
+    return Discovery(tool, current, best, held_back_newest_first)

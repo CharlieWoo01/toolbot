@@ -1,4 +1,4 @@
-"""Offline consistency check: definition ⇄ lock file ⇄ committed artifacts.
+"""Offline consistency check: definition ⇄ lock file ⇄ committed artifacts ⇄ version pins.
 
 Runs on every merge request. It proves the committed binaries are exactly the
 ones recorded for the declared version, catching hand edits, corrupted
@@ -13,7 +13,8 @@ from toolbot.assets.checksums import hash_file
 from toolbot.config.models import ToolDefinition
 from toolbot.errors import ToolbotError
 from toolbot.lock import read_lock
-from toolbot.paths import repo_relative
+from toolbot.paths import destination_path, repo_relative
+from toolbot.version_files import check_version_files
 from toolbot.versions import tag_for
 
 
@@ -21,8 +22,8 @@ def verify_tool(root: Path, tool: ToolDefinition) -> list[str]:
     hint = f'run "toolbot update {tool.name}"'
     try:
         lock = read_lock(tool)
-    except ToolbotError as err:
-        return [f"{tool.name}: {err.message}"]
+    except ToolbotError as error:
+        return [f"{tool.name}: {error.message}"]
     if lock is None:
         return [f"{tool.name}: no lock file; artifacts have never been fetched ({hint})"]
 
@@ -40,22 +41,25 @@ def verify_tool(root: Path, tool: ToolDefinition) -> list[str]:
     if lock.source != source:
         problems.append(f"source changed since the artifacts were fetched ({hint})")
 
-    configured = {a.id for a in tool.assets}
+    configured = {asset.id for asset in tool.assets}
     problems.extend(
-        f'lock has asset "{i}" that is no longer configured ({hint})' for i in lock.assets if i not in configured
+        f'lock has asset "{asset_id}" that is no longer configured ({hint})'
+        for asset_id in lock.assets
+        if asset_id not in configured
     )
     for asset in tool.assets:
         locked = lock.assets.get(asset.id)
         if locked is None:
             problems.append(f'asset "{asset.id}" has not been fetched ({hint})')
             continue
-        expected = repo_relative(root, tool.dir.joinpath(*asset.destination.split("/")))
-        if locked.destination != expected:
-            problems.append(f'asset "{asset.id}" destination changed to {expected} ({hint})')
+        expected_destination = repo_relative(root, destination_path(tool.dir, asset.destination))
+        if locked.destination != expected_destination:
+            problems.append(f'asset "{asset.id}" destination changed to {expected_destination} ({hint})')
             continue
-        file = root.joinpath(*locked.destination.split("/"))
-        if not file.is_file():
+        committed_file = root.joinpath(*locked.destination.split("/"))
+        if not committed_file.is_file():
             problems.append(f'asset "{asset.id}": {locked.destination} is missing ({hint})')
-        elif hash_file(file, "sha256") != locked.sha256:
+        elif hash_file(committed_file, "sha256") != locked.sha256:
             problems.append(f'asset "{asset.id}": {locked.destination} does not match the lock file sha256 ({hint})')
-    return [f"{tool.name}: {p}" for p in problems]
+    problems.extend(check_version_files(tool))
+    return [f"{tool.name}: {problem}" for problem in problems]

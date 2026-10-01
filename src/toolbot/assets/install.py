@@ -5,9 +5,12 @@ from __future__ import annotations
 import os
 import secrets
 import shutil
+import stat
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+EXECUTE_BITS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
 
 
 @dataclass(frozen=True)
@@ -15,6 +18,8 @@ class PendingFile:
     destination: Path
     source_file: Path | None = None
     content: str | None = None
+    executable: bool = False
+    """Set the executable bits (POSIX; git records it via ``git add --chmod``)."""
 
 
 def replace_files(files: Sequence[PendingFile], before_place: Callable[[Path], None] | None = None) -> None:
@@ -43,6 +48,8 @@ def replace_files(files: Sequence[PendingFile], before_place: Callable[[Path], N
             else:
                 with staged_path.open("x", encoding="utf-8", newline="\n") as handle:
                     handle.write(file.content or "")
+            if file.executable:
+                staged_path.chmod(staged_path.stat().st_mode | EXECUTE_BITS)
         for file, staged_path in staged:
             backup: Path | None = None
             if file.destination.exists():

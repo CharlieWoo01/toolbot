@@ -53,7 +53,7 @@ class GitIdentity:
 
     def __post_init__(self) -> None:
         for value in (self.name, self.email):
-            if not value or any(c in value for c in "\n\r<>\0"):
+            if not value or any(character in value for character in "\n\r<>\0"):
                 raise ToolbotError("USAGE", "git author name/email must be non-empty single-line values")
 
 
@@ -66,10 +66,10 @@ class GitAuth:
     token: str
 
     def config(self) -> dict[str, str]:
-        parts = urlsplit(self.url)
-        origin = f"{parts.scheme}://{parts.netloc}/"
-        basic = base64.b64encode(f"{self.username}:{self.token}".encode()).decode()
-        return {f"http.{origin}.extraHeader": f"Authorization: Basic {basic}"}
+        url_parts = urlsplit(self.url)
+        origin = f"{url_parts.scheme}://{url_parts.netloc}/"
+        basic_credentials = base64.b64encode(f"{self.username}:{self.token}".encode()).decode()
+        return {f"http.{origin}.extraHeader": f"Authorization: Basic {basic_credentials}"}
 
 
 class Git:
@@ -85,24 +85,24 @@ class Git:
         timeout: float = 600,
     ) -> None:
         self.cwd = cwd
-        self._secrets = [s for s in secrets if s]
+        self._secrets = [secret for secret in secrets if secret]
         self._timeout = timeout
-        base = dict(os.environ)
-        base.update(env or {})
-        base.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
-        base.pop("GIT_ASKPASS", None)
+        environment = dict(os.environ)
+        environment.update(env or {})
+        environment.update({"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"})
+        environment.pop("GIT_ASKPASS", None)
         if config:
-            count = int(base.get("GIT_CONFIG_COUNT", "0") or "0")
+            existing_count = int(environment.get("GIT_CONFIG_COUNT", "0") or "0")
             for offset, (key, value) in enumerate(config.items()):
-                base[f"GIT_CONFIG_KEY_{count + offset}"] = key
-                base[f"GIT_CONFIG_VALUE_{count + offset}"] = value
-            base["GIT_CONFIG_COUNT"] = str(count + len(config))
-        self._env = base
+                environment[f"GIT_CONFIG_KEY_{existing_count + offset}"] = key
+                environment[f"GIT_CONFIG_VALUE_{existing_count + offset}"] = value
+            environment["GIT_CONFIG_COUNT"] = str(existing_count + len(config))
+        self._env = environment
 
-    def run(self, *args: str, stdin: str | None = None, ok_codes: tuple[int, ...] = (0,)) -> str:
+    def run(self, *arguments: str, stdin: str | None = None, ok_codes: tuple[int, ...] = (0,)) -> str:
         try:
-            proc = subprocess.run(
-                ["git", *args],
+            completed = subprocess.run(
+                ["git", *arguments],
                 cwd=self.cwd,
                 env=self._env,
                 input=stdin,
@@ -114,11 +114,11 @@ class Git:
         except FileNotFoundError:
             raise ToolbotError("GIT_ERROR", "git is not installed or not on PATH") from None
         except subprocess.TimeoutExpired:
-            raise ToolbotError("GIT_ERROR", f"git {args[0]} timed out") from None
-        if proc.returncode not in ok_codes:
-            detail = self._redact((proc.stderr or proc.stdout).strip()) or f"exit code {proc.returncode}"
-            raise ToolbotError("GIT_ERROR", f"git {args[0]} failed: {detail}")
-        return proc.stdout
+            raise ToolbotError("GIT_ERROR", f"git {arguments[0]} timed out") from None
+        if completed.returncode not in ok_codes:
+            detail = self._redact((completed.stderr or completed.stdout).strip()) or f"exit code {completed.returncode}"
+            raise ToolbotError("GIT_ERROR", f"git {arguments[0]} failed: {detail}")
+        return completed.stdout
 
     def _redact(self, text: str) -> str:
         for secret in self._secrets:
@@ -128,8 +128,10 @@ class Git:
 
 def check_branch_name(branch: str) -> None:
     """Reject anything git itself would not accept as a branch name."""
-    proc = subprocess.run(["git", "check-ref-format", "--branch", branch], capture_output=True, text=True, check=False)
-    if proc.returncode != 0 or proc.stdout.strip() != branch:
+    completed = subprocess.run(
+        ["git", "check-ref-format", "--branch", branch], capture_output=True, text=True, check=False
+    )
+    if completed.returncode != 0 or completed.stdout.strip() != branch:
         raise ToolbotError("USAGE", f'"{branch}" is not a valid branch name')
 
 
@@ -166,23 +168,23 @@ class Repository:
 
     def fetch_branch(self, branch: str, depth: int | None = 1) -> str:
         """Fetch ``branch`` from the remote into ``refs/toolbot/remote/<branch>``; return its commit."""
-        local = f"{REF_NAMESPACE}/remote/{branch}"
-        args = ["fetch", "--no-tags", "--quiet", "--no-write-fetch-head"]
+        local_ref = f"{REF_NAMESPACE}/remote/{branch}"
+        fetch_arguments = ["fetch", "--no-tags", "--quiet", "--no-write-fetch-head"]
         if depth:
-            args.append(f"--depth={depth}")
-        self.git.run(*args, self.remote_url, f"+refs/heads/{branch}:{local}")
-        return self.git.run("rev-parse", local).strip()
+            fetch_arguments.append(f"--depth={depth}")
+        self.git.run(*fetch_arguments, self.remote_url, f"+refs/heads/{branch}:{local_ref}")
+        return self.git.run("rev-parse", local_ref).strip()
 
     def remote_head(self, branch: str) -> str | None:
-        out = self.git.run("ls-remote", "--heads", self.remote_url, f"refs/heads/{branch}").strip()
-        return out.split()[0] if out else None
+        listing = self.git.run("ls-remote", "--heads", self.remote_url, f"refs/heads/{branch}").strip()
+        return listing.split()[0] if listing else None
 
     def trailers(self, commit: str) -> dict[str, str]:
-        out = self.git.run("log", "-1", "--format=%(trailers:only,unfold)", commit)
+        trailer_lines = self.git.run("log", "-1", "--format=%(trailers:only,unfold)", commit)
         result: dict[str, str] = {}
-        for line in out.splitlines():
-            if m := _TRAILER.match(line.strip()):
-                result[m.group(1)] = m.group(2).strip()
+        for line in trailer_lines.splitlines():
+            if trailer := _TRAILER.match(line.strip()):
+                result[trailer.group(1)] = trailer.group(2).strip()
         return result
 
     @contextmanager
@@ -237,9 +239,13 @@ class Worktree:
         self.git.run("checkout", "--quiet", "--force", "-B", branch, commit)
         self.git.run("clean", "-ffdxq")
 
-    def commit(self, paths: Sequence[str], message: str) -> str | None:
-        """Stage ``paths`` and commit. Returns the commit, or None if nothing changed."""
+    def commit(self, paths: Sequence[str], message: str, executable: Sequence[str] = ()) -> str | None:
+        """Stage ``paths`` (``executable`` ones with mode 755, also on Windows where
+        the filesystem has no such bit) and commit. Returns the commit, or None if
+        nothing changed."""
         self.git.run("add", "--all", "--", *paths)
+        if executable:
+            self.git.run("add", "--chmod=+x", "--", *executable)
         if not self.git.run("diff", "--cached", "--name-only").strip():
             return None
         self.git.run("commit", "--quiet", "--file=-", stdin=message)

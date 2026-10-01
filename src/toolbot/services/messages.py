@@ -73,6 +73,11 @@ def description(tool: ToolDefinition, result: ApplyResult, superseding: list[str
             f"| `{asset.id}` | `{asset.upstream}` | {asset.size:,} B | `{asset.sha256[:16]}…` | "
             f"{_verification(asset.verified_by)} |"
         )
+    if not result.assets:
+        lines = lines[:-4]  # version pins only: no assets table
+    if result.version_files:
+        lines += ["", "### Version pins", ""]
+        lines += [f"- `{path}`" for path in result.version_files]
     if superseding:
         lines += ["", f"Supersedes {', '.join(superseding)}."]
     notes = _notes_excerpt(result.release.notes)

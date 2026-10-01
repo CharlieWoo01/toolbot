@@ -54,10 +54,27 @@ def test_ignored_versions_and_constraints(tmp_path: Path, router: Router) -> Non
         tmp_path, router, [rel("v2.1.0"), rel("v1.3.0"), rel("v1.2.0")], extra='ignore:\n  - "1.3.0"\n  - ">=2.0.0"\n'
     )
     assert found.latest is not None and found.latest.version.raw == "1.2.0"
-    assert sorted(found.ignored) == ["1.3.0", "2.1.0"]
+    assert found.held_back == ["2.1.0", "1.3.0"]  # newest first
 
 
 def test_ahead_and_no_releases(tmp_path: Path, router: Router) -> None:
     assert run(tmp_path, router, [rel("v0.9.0")]).status == "ahead"
     router.routes.clear()
     assert run(tmp_path, router, []).status == "no-releases"
+
+
+def test_allow_constrains_to_a_version_line(tmp_path: Path, router: Router) -> None:
+    found = run(tmp_path, router, [rel("v2.0.0"), rel("v1.9.0"), rel("v1.4.2")], extra='allow: ">=1.0.0, <2.0.0"\n')
+    assert found.latest is not None and found.latest.version.raw == "1.9.0"
+    assert found.held_back == ["2.0.0"]
+
+
+def test_allow_can_pin_an_exact_version(tmp_path: Path, router: Router) -> None:
+    found = run(tmp_path, router, [rel("v1.9.0"), rel("v1.4.2")], extra='allow: "==1.4.2"\n')
+    assert found.latest is not None and found.latest.version.raw == "1.4.2"
+
+
+def test_held_back_summary_is_short(tmp_path: Path, router: Router) -> None:
+    releases = [rel(f"v2.{minor}.0") for minor in range(10)] + [rel("v1.1.0")]
+    found = run(tmp_path, router, releases, extra='allow: "<2.0.0"\n')
+    assert found.held_back_summary() == "2.9.0, 2.8.0, 2.7.0 (+7 more)"
