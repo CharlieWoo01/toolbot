@@ -121,5 +121,37 @@ def test_download_streams_and_enforces_limits(router: Router, tmp_path: Path) ->
     assert (tmp_path / "f").read_text() == "content"
     with pytest.raises(ToolbotError, match="limit"):
         http.download(HttpRequest("https://a.example/big"), tmp_path / "big", "x", 10)
-    with pytest.raises(ToolbotError):
+    with pytest.raises(ToolbotError, match="truncated"):
         http.download(HttpRequest("https://a.example/short"), tmp_path / "short", "x", 5000)
+    assert not (tmp_path / "short").exists()  # partial files are discarded
+
+
+class DropsMidway(httpx.SyncByteStream):
+    def __iter__(self):  # type: ignore[no-untyped-def]
+        yield b"first half"
+        raise httpx.ReadTimeout("stalled")
+
+
+def test_interrupted_download_is_retried_from_the_start(router: Router, tmp_path: Path) -> None:
+    attempts = 0
+
+    def flaky(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(200, stream=DropsMidway())
+        return httpx.Response(200, content=b"complete file")
+
+    router.add("GET", "https://a.example/big", flaky)
+    http = make_http(router)
+    assert http.download(HttpRequest("https://a.example/big"), tmp_path / "big", "x", 1000) == 13
+    assert (tmp_path / "big").read_bytes() == b"complete file"
+    assert attempts == 2
+
+
+def test_download_gives_up_after_the_retries(router: Router, tmp_path: Path) -> None:
+    router.add("GET", "https://a.example/big", lambda _r: httpx.Response(200, stream=DropsMidway()))
+    with pytest.raises(ToolbotError, match="download interrupted: ReadTimeout"):
+        make_http(router).download(HttpRequest("https://a.example/big"), tmp_path / "big", "x", 1000)
+    assert len(router.requests) == 3  # retries=2 in tests
+    assert not (tmp_path / "big").exists()

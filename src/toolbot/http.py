@@ -118,7 +118,26 @@ class HttpClient:
         return True
 
     def download(self, request: HttpRequest, path: Path, what: str, max_bytes: int, auth_hint: str = "") -> int:
-        """Stream the body to ``path`` (must not exist). Returns the byte count."""
+        """Stream the body to ``path`` (must not exist). Returns the byte count.
+
+        A transfer interrupted or truncated midway (common for 100 MB+ files)
+        is retried from the start; the partial file is always discarded.
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return self._download_once(request, path, what, max_bytes, auth_hint)
+            except _InterruptedDownload as interrupted:
+                path.unlink(missing_ok=True)
+                if attempt > self._retries:
+                    raise ToolbotError("HTTP_ERROR", interrupted.message) from None
+                self._sleep(min(self._backoff * 2 ** (attempt - 1), 60.0))
+            except BaseException:
+                path.unlink(missing_ok=True)
+                raise
+
+    def _download_once(self, request: HttpRequest, path: Path, what: str, max_bytes: int, auth_hint: str) -> int:
         response = self._open_stream(request, what, auth_hint)
         try:
             declared_length = response.headers.get("content-length")
@@ -134,11 +153,11 @@ class HttpClient:
                             raise ToolbotError("HTTP_ERROR", f"{what}: download exceeds the {max_bytes} byte limit")
                         output.write(chunk)
             except httpx.TransportError as error:
-                raise ToolbotError("HTTP_ERROR", f"{what}: download interrupted: {type(error).__name__}") from None
+                raise _InterruptedDownload(f"{what}: download interrupted: {type(error).__name__}") from None
         finally:
             response.close()
         if expected_bytes is not None and received_bytes != expected_bytes:
-            raise ToolbotError("HTTP_ERROR", f"{what}: truncated download ({received_bytes} of {expected_bytes} bytes)")
+            raise _InterruptedDownload(f"{what}: truncated download ({received_bytes} of {expected_bytes} bytes)")
         return received_bytes
 
     # -- writes (target provider APIs) ---------------------------------------------
@@ -232,6 +251,12 @@ class HttpClient:
                 self._sleep(min(delay, 60.0))
                 continue
             self._sleep(min(self._backoff * 2 ** (attempt - 1), 60.0))
+
+
+class _InterruptedDownload(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
 
 
 def without_credentials(headers: dict[str, str]) -> dict[str, str]:
