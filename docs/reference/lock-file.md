@@ -28,10 +28,12 @@
 | Field | Meaning |
 | --- | --- |
 | `version`, `tag`, `source` | Exactly which upstream release the files came from |
-| `assets.<id>.upstream` | Upstream file that was downloaded (useful with `pattern`) |
-| `destination` | Repository-relative path of the committed file |
-| `size`, `sha256` | Of the committed file |
-| `verifiedBy` | `sha256:<checksum file>`, `sha512:<checksum file>`, `provider-digest` or `none` |
+| `assets.<id>.upstream` | What was downloaded: release asset name (useful with `pattern`), URL, or source-repository path. With `extract`, followed by `!<member>`, e.g. `…/terraform_1.16.4_linux_amd64.zip!terraform` |
+| `destination` | Repository-relative path of the committed file (inside or outside `tools/`) |
+| `size`, `sha256` | Of the committed file (the extracted file, for archives) |
+| `verifiedBy` | `sha256:<checksum file, URL or path>`, `sha512:…`, `provider-digest` or `none` |
+
+A tool with only `version-files` has a lock file with no assets; `toolbot verify` checks its pins instead.
 
 ## Why it exists
 

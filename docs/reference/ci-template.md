@@ -16,7 +16,7 @@ variables:
 
 | Job | Runs on | Script |
 | --- | --- | --- |
-| `toolbot-verify` | MRs and the default branch, if `tools/*/tool.yaml` exists; never on schedules | `toolbot validate`, `toolbot verify` |
+| `toolbot-verify` | MRs and the default branch, if `tools/*/tool.yaml` or `toolbot.yaml` exists; never on schedules | `toolbot validate`, `toolbot verify` |
 | `toolbot-check` | Schedules and manual pipelines with `TOOLBOT_RUN=true` | `toolbot check $TOOLBOT_CHECK_ARGS` with `resource_group: toolbot` and a 1 h timeout |
 
 Both use stage `test` and are skipped when `TOOLBOT_IMAGE` is empty.

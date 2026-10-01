@@ -48,7 +48,7 @@ pact-broker-cli
   Current: 0.8.6
   Latest:  0.8.8
   Update available.
-  Assets:
+  Changes:
     ✓ pact-broker-cli-x86_64-pc-windows-msvc.zip → pact-broker-cli-x86_64-pc-windows-msvc.zip [sha256 via pact-broker-cli-x86_64-pc-windows-msvc.zip.sha256]
     (target not configured: existing merge requests not checked)
   Would create: toolbot/pact-broker-cli/0.8.8

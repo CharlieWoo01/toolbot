@@ -42,11 +42,13 @@ nav:
       - Introduction: guide/introduction.md
       - Quick start: guide/quick-start.md
       - Adding a tool: guide/adding-a-tool.md
+      - What can be updated: guide/what-can-be-updated.md
       - Examples: guide/examples.md
       - Tags & asset matching: guide/matching.md
       - Versions, prereleases & ignoring: guide/versions.md
       - Checksums: guide/checksums.md
       - Providers: guide/providers.md
+      - Hosts (public & internal): guide/hosts.md
       - Update lifecycle: guide/lifecycle.md
       - Reviewing update MRs: guide/reviewing.md
       - Security model: guide/security.md
@@ -54,9 +56,10 @@ nav:
   - Deploy:
       - Overview: deploy/overview.md
       - GitLab CI: deploy/gitlab.md
+      - GitHub Actions: deploy/github-actions.md
+      - Control repository (GitOps): deploy/control-repository.md
       - Running locally: deploy/local.md
       - Container image: deploy/image.md
-      - GitHub Actions: deploy/github-actions.md
       - Docker, Kubernetes & other CI: deploy/anywhere.md
       - Tokens & permissions: deploy/tokens.md
       - Proxies & internal networks: deploy/networking.md

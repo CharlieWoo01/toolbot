@@ -53,7 +53,7 @@ This adds two jobs (stage `test`; override `stage:` if needed):
 
 | Job | Runs | Does |
 | --- | --- | --- |
-| `toolbot-verify` | MRs and the default branch, if `tools/*/tool.yaml` exists | `toolbot validate && toolbot verify` |
+| `toolbot-verify` | MRs and the default branch, if `tools/*/tool.yaml` or `toolbot.yaml` exists | `toolbot validate && toolbot verify` |
 | `toolbot-check` | schedules/manual runs with `TOOLBOT_RUN=true` | `toolbot check $TOOLBOT_CHECK_ARGS` (`resource_group: toolbot`) |
 
 Then [add your first tool](../guide/adding-a-tool.md) and commit it.

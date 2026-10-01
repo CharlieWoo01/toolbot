@@ -17,19 +17,22 @@ chore(tools): update pact-broker-cli to 0.8.8
 ## How it works
 
 ```text
-tools/<name>/tool.yaml
-        │
+tools/<name>/tool.yaml                     toolbot.yaml (optional, GitOps)
+        │                                   hosts · central rules · target sets
         ▼
-toolbot check ── source provider (GitHub / GitLab release APIs)
-        │          newest acceptable release: tag template, SemVer/PEP 440 ordering,
-        │          prereleases off by default, ignore rules
+toolbot check ── source provider (GitHub / GitLab releases or tags, any instance)
+        │          newest acceptable version: tag template, SemVer/PEP 440 ordering,
+        │          prereleases off by default, ignore/allow rules
         │
-        ├── target provider (GitLab): open MR for toolbot/<tool>/<version>? closed = rejected?
+        ├── target provider (GitLab MRs / GitHub PRs): open request for toolbot/<tool>/<version>?
         │
-        ├── download every asset → verify checksums → atomic replace → tool.lock.json
+        ├── download (release asset, URL, or file in a repo) → verify checksum
+        │   → extract from zip/tar if asked → bump version pins → atomic replace → tool.lock.json
         ├── private temp repo + worktree → commit → push --force-with-lease
-        └── create merge request, supersede older Toolbot MRs for the tool
+        └── create merge/pull request, supersede older Toolbot requests for the tool
 ```
+
+What a tool update can be: a release asset, a file from a download site, **the binary inside a ZIP/tar.gz**, a file committed in another repository, or **just version pins** (`.terraform-version`, a Dockerfile `ARG`), anywhere in the repository. See [What can be updated](docs/guide/what-can-be-updated.md).
 
 - **One active update per tool.** A newer release supersedes the open MR instead of piling up MRs.
 - **Idempotent.** Re-runs find the existing MR by its deterministic branch and do nothing.
@@ -55,8 +58,9 @@ toolbot update pact-broker-cli --latest   # apply to the working tree (no git)
 | `toolbot validate` | Validate definitions (offline) |
 | `toolbot verify` | Committed artifacts match lock files (offline; run in MR pipelines) |
 | `toolbot outdated [--json]` | Current vs latest per tool |
+| `toolbot targets [--targets SET]` | Repositories a target set in `toolbot.yaml` covers |
 | `toolbot update TOOL [--version V \| --latest]` | Fetch, verify and install into the working tree |
-| `toolbot check [TOOL…] [--dry-run]` | Full lifecycle: branch, commit, push, merge request |
+| `toolbot check [TOOL…] [--targets SET] [--dry-run]` | Full lifecycle: branch, commit, push, merge/pull request |
 
 ## A tool definition
 
@@ -79,7 +83,7 @@ assets:
 # ignore: ["0.9.0", ">=2.0.0"]
 ```
 
-More real, commented definitions are in [`examples/`](examples/README.md): the Pact CLIs (including monorepo tags), gitleaks, trivy and the GitLab-hosted glab. Reference: [tool.yaml](docs/reference/tool-yaml.md).
+More real, commented definitions are in [`examples/`](examples/README.md): the Pact CLIs (including monorepo tags), gitleaks, trivy, the GitLab-hosted glab, Terraform (ZIP extract, and a version-pin-only variant), Helm and kubectl. Reference: [tool.yaml](docs/reference/tool-yaml.md).
 
 ## Running it in GitLab CI
 
@@ -94,9 +98,19 @@ variables:
 
 Add the masked, protected variable `TOOLBOT_GITLAB_TOKEN` (project access token, `api`, Developer), then a pipeline schedule with `TOOLBOT_RUN=true`. Optional: `TOOLBOT_GITHUB_TOKEN` (read-only) to avoid GitHub rate limits. Step by step: [GitLab CI](docs/deploy/gitlab.md) · [tokens](docs/deploy/tokens.md).
 
+## Running it on GitHub
+
+Toolbot is also a GitHub Action: copy [`templates/github/toolbot.yml`](templates/github/toolbot.yml) and reference `your-org/toolbot@v0.1.0`. No Marketplace publishing is needed. See [GitHub Actions](docs/deploy/github-actions.md).
+
+## Many repositories from one place (GitOps)
+
+A control repository's `toolbot.yaml` lists hosts (public and internal GitHub/GitLab), central version rules, and target sets (repositories, whole groups or organisations), each run by its own schedule. See [Control repository](docs/deploy/control-repository.md) and [`examples/control-repo/`](examples/control-repo/README.md).
+
 | I want to… | Read |
 | --- | --- |
 | Try it locally, including a full run against a test project | [Running locally](docs/deploy/local.md) |
+| Update ZIPs, binaries in repos, or just version pins | [What can be updated](docs/guide/what-can-be-updated.md) |
+| Use internal GitLab / GitHub Enterprise | [Hosts](docs/guide/hosts.md) |
 | Add a tool | [Adding a tool](docs/guide/adding-a-tool.md) · [Examples](docs/guide/examples.md) |
 | Understand prereleases, ignore rules and rejections | [Versions](docs/guide/versions.md) |
 | Configure checksums | [Checksums](docs/guide/checksums.md) |
@@ -112,9 +126,11 @@ Add the masked, protected variable `TOOLBOT_GITLAB_TOKEN` (project access token,
 ├── src/toolbot/              the application (see docs/contributing/development.md)
 ├── tests/                    pytest; tests/integration is opt-in (-m integration)
 ├── tools/                    tools tracked by this project (Pact Broker CLI)
-├── examples/tools/           commented example definitions (Pact CLIs, gitleaks, trivy, glab)
-├── schema/tool.schema.json   editor schema for tool.yaml
-├── templates/                GitLab CI template for consuming projects
+├── examples/tools/           commented example definitions (Pact CLIs, gitleaks, trivy, glab, Terraform, Helm, kubectl)
+├── examples/control-repo/    example GitOps control repository (toolbot.yaml + schedules)
+├── schema/                   editor schemas for tool.yaml and toolbot.yaml
+├── templates/                GitLab CI template and GitHub workflow for consuming repositories
+├── action.yml                GitHub Action (uses: your-org/toolbot@<tag>)
 ├── docs/ + mkdocs.yml        documentation site
 ├── Dockerfile                python:3.13-slim + git + toolbot
 ├── requirements.lock         pinned runtime dependencies for the image

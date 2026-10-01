@@ -13,6 +13,12 @@ The repository's `examples/tools/` folder holds real, working definitions. Each 
 | `gitleaks` | GitHub | Checksum file named with the version |
 | `trivy` | GitHub | `ignore` to hold back a major version |
 | `glab` | GitLab | A tool released on GitLab.com |
+| `terraform` | GitHub + releases.hashicorp.com | ZIPs from a download site, `SHA256SUMS` by URL, **`extract`** the binary |
+| `terraform-pin` | GitHub | **Version pins only** (`version-files`): bumps `/.terraform-version`, commits no binary |
+| `helm` | GitHub + get.helm.sh | `extract` from tar.gz and zip, checksum URL per file, `allow: "<4.0.0"` |
+| `kubectl` | GitHub + dl.k8s.io | Plain binaries by URL, per-asset checksum URL, `allow` a minor line |
+
+The [example control repository](../deploy/control-repository.md) (`examples/control-repo/`) shows hosts, central rules and scheduled target sets.
 
 Try them without changing anything:
 
@@ -112,21 +118,49 @@ checksum: { type: file, file: "tool_{version}_checksums.txt" } # shared, version
 checksum: { type: provider }                                  # GitHub's own SHA-256 digest
 ```
 
-### Stay on a major version
+### Stay on a major version, or pin
 
 ```yaml
-ignore:
-  - ">=1.0.0"
+allow: "<2.0.0"           # never propose 2.x
+allow: "==1.4.2"          # stay exactly here
+ignore: ["1.5.0"]         # skip one bad release
 ```
 
-## Tools that don't fit (yet)
+### Binaries on a download site (Terraform, Vault, Packer, Helm, kubectl)
 
-Toolbot's providers read **GitHub or GitLab releases**. Some popular tools distribute binaries elsewhere:
+Versions come from the GitHub releases; files from the vendor's site:
 
-| Tool | Where binaries live | Status |
-| --- | --- | --- |
-| Terraform, Vault, Packer | `releases.hashicorp.com` | Needs a future "direct HTTP" provider |
-| kubectl | `dl.k8s.io` | Needs a future "direct HTTP" provider |
-| Helm | `get.helm.sh` (GitHub releases hold only signatures) | Needs a future "direct HTTP" provider |
+```yaml
+checksum: { type: file, url: "https://releases.hashicorp.com/vault/{version}/vault_{version}_SHA256SUMS" }
+assets:
+  linux-amd64:
+    url: https://releases.hashicorp.com/vault/{version}/vault_{version}_linux_amd64.zip
+    extract: vault
+    destination: /bin/vault
+```
 
-See [Adding a provider](../contributing/adding-a-provider.md).
+### Commit the binary from an archive
+
+```yaml
+name: glab_{version}_linux_amd64.tar.gz
+extract: bin/glab                     # path inside the archive
+destination: linux-amd64/glab
+```
+
+### A binary committed in another repository
+
+```yaml
+source: { host: internal-gitlab, repository: platform/deploy-cli, versions: tags }
+assets:
+  linux-amd64: { path: dist/linux-amd64/deploy-cli, destination: /bin/deploy-cli }
+```
+
+### Only bump version pins
+
+```yaml
+version-files:
+  - { path: /.terraform-version, template: "{version}" }
+  - { path: /Dockerfile, template: "ARG TERRAFORM_VERSION={version}" }
+```
+
+All of these are explained in [What can be updated](what-can-be-updated.md).
