@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=../../schema/toolbot.schema.json
+#
+# toolbot.yaml — configuration of a Toolbot CONTROL REPOSITORY (GitOps).
+#
+# This one reviewed file decides, for the whole organisation:
+#   hosts    which GitHub/GitLab instances exist and which env var holds each token
+#   rules    version policy (ignore, allow/pin, prereleases, disable) per tool/repo
+#   targets  which repositories Toolbot maintains, grouped into named sets that
+#            are run by separate schedules (see .gitlab-ci.yml / the workflow)
+#
+# Each target repository keeps its own tools/<name>/tool.yaml definitions and
+# binaries; Toolbot raises merge/pull requests there.
+
+hosts:
+  # Public platforms: sources for open-source tools, and optionally targets.
+  github:
+    type: github
+    url: https://github.com
+    token-env: TOOLBOT_GITHUB_TOKEN       # read-only is enough if not used as a target
+  gitlab-com:
+    type: gitlab
+    url: https://gitlab.com
+    token-env: TOOLBOT_GITLAB_COM_TOKEN   # optional; public projects need no token
+
+  # Internal platforms: vendor/in-house tools as sources, and your repositories as targets.
+  internal-gitlab:
+    type: gitlab
+    url: https://gitlab.example.com
+    token-env: TOOLBOT_GITLAB_TOKEN       # api scope, Developer on target projects
+  internal-github:
+    type: github
+    url: https://github.example.com       # GitHub Enterprise Server
+    token-env: TOOLBOT_GHE_TOKEN
+
+defaults:
+  labels: [toolbot, tool-update]
+  git-author:
+    name: Toolbot
+    email: toolbot@example.com
+  # base-branch: main                     # default: each repository's default branch
+
+rules:
+  # Leave legacy repositories alone entirely.
+  - repositories: ["platform/legacy-*"]
+    enabled: false
+
+  # Organisation-wide version policy, applied on top of each repository's tool.yaml.
+  - tools: ["terraform", "terraform-pin"]  # binaries and version pins alike
+    allow: ">=1.16.0, <2.0.0"             # stay on Terraform 1.x
+  - tools: ["kubectl"]
+    allow: ">=1.36.0, <1.37.0"            # match the clusters' minor version
+  - tools: ["helm"]
+    allow: "<4.0.0"                       # Helm 4 not approved yet
+  - tools: ["pact-*"]
+    ignore: ["0.9.0"]                     # known-bad release
+
+  # One team wants release candidates of one tool.
+  - tools: ["pact-cli"]
+    repositories: ["team/contract-testing"]
+    prereleases: true
+
+targets:
+  # Run nightly: every project in the platform group that has a tools/ directory,
+  # plus one repository elsewhere.
+  nightly:
+    - host: internal-gitlab
+      group: platform
+      exclude: ["platform/sandbox-*"]
+    - host: internal-gitlab
+      repository: team/ci-tools
+
+  # Run weekly: GitHub organisation repositories whose names end in -tools.
+  weekly:
+    - host: internal-github
+      group: acme
+      include: ["acme/*-tools"]

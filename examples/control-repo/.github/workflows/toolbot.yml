@@ -1,0 +1,77 @@
+# Toolbot control repository on GitHub: each cron entry runs one target set
+# from toolbot.yaml. Copy to .github/workflows/toolbot.yml of the control repo.
+name: Toolbot
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # nightly
+    - cron: "0 6 * * 1"   # weekly
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: Target set from toolbot.yaml
+        type: choice
+        options: [nightly, weekly, all]
+        default: nightly
+      dry-run:
+        description: Report only
+        type: boolean
+        default: true
+  pull_request:
+    paths: ["toolbot.yaml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolbot
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: your-org/toolbot@v0.1.0
+        with:
+          args: validate
+      - uses: your-org/toolbot@v0.1.0
+        with:
+          args: targets --targets all
+        env:
+          TOOLBOT_GITLAB_TOKEN: ${{ secrets.TOOLBOT_GITLAB_TOKEN }}
+          TOOLBOT_GHE_TOKEN: ${{ secrets.TOOLBOT_GHE_TOKEN }}
+
+  check:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Choose target set
+        id: choose
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_TARGETS: ${{ inputs.targets }}
+          INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          case "$SCHEDULE" in
+            "0 2 * * *") targets=nightly ;;
+            "0 6 * * 1") targets=weekly ;;
+            *) targets="$INPUT_TARGETS" ;;
+          esac
+          arguments="check --targets $targets"
+          [ "$INPUT_DRY_RUN" = "true" ] && arguments="$arguments --dry-run"
+          echo "arguments=$arguments" >> "$GITHUB_OUTPUT"
+      - uses: your-org/toolbot@v0.1.0
+        with:
+          args: ${{ steps.choose.outputs.arguments }}
+        env:
+          TOOLBOT_GITLAB_TOKEN: ${{ secrets.TOOLBOT_GITLAB_TOKEN }}
+          TOOLBOT_GHE_TOKEN: ${{ secrets.TOOLBOT_GHE_TOKEN }}
+          TOOLBOT_GITHUB_TOKEN: ${{ secrets.TOOLBOT_GITHUB_TOKEN }}

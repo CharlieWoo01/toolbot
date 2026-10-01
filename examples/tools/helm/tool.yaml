@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# Helm — Kubernetes package manager.
+#
+# WHAT THIS EXAMPLE SHOWS:
+#   * binaries on a download site (get.helm.sh), versions from GitHub releases;
+#   * a per-file checksum URL built from {asset} (the downloaded file's name);
+#   * `extract` to commit just the binary from the .tar.gz / .zip (the
+#     checksum is verified on the archive first);
+#   * `allow` to stay on a major version: Helm 3 and Helm 4 are released in
+#     parallel, and this keeps the tool on 3.x until you choose to move.
+#
+# Upstream:
+#   versions   https://github.com/helm/helm/releases   (v4.3.0, v3.22.0, …)
+#   downloads  https://get.helm.sh/helm-v3.22.0-linux-amd64.tar.gz
+#   checksums  https://get.helm.sh/helm-v3.22.0-linux-amd64.tar.gz.sha256sum
+
+name: helm
+version: "3.21.4"
+tag: v{version}
+allow: "<4.0.0"                 # only propose 3.x versions
+
+source:
+  provider: github
+  repository: helm/helm
+
+checksum:
+  type: file
+  url: https://get.helm.sh/{asset}.sha256sum
+
+assets:
+  linux-amd64:
+    url: https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz
+    extract: linux-amd64/helm
+    destination: linux-amd64/helm
+  windows-amd64:
+    url: https://get.helm.sh/helm-v{version}-windows-amd64.zip
+    extract: windows-amd64/helm.exe
+    destination: windows-amd64/helm.exe

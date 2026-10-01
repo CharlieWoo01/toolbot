@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# kubectl — Kubernetes command-line client.
+#
+# WHAT THIS EXAMPLE SHOWS:
+#   * plain executables (not archives) from dl.k8s.io, versions from GitHub;
+#   * a checksum file per download holding just the bare SHA-256, set per
+#     asset because the path differs by platform;
+#   * tracking ONE minor line: kubectl should stay within one minor version
+#     of your clusters, so `allow` keeps it on 1.36.x patch releases while
+#     Kubernetes publishes 1.37, 1.38 … in parallel. Widen the range when the
+#     clusters are upgraded.
+#
+# Upstream:
+#   versions   https://github.com/kubernetes/kubernetes/releases
+#   downloads  https://dl.k8s.io/release/v1.36.5/bin/linux/amd64/kubectl
+#   checksums  https://dl.k8s.io/release/v1.36.5/bin/linux/amd64/kubectl.sha256
+
+name: kubectl
+version: "1.36.4"
+tag: v{version}
+allow: ">=1.36.0, <1.37.0"
+
+source:
+  provider: github
+  repository: kubernetes/kubernetes
+
+assets:
+  linux-amd64:
+    url: https://dl.k8s.io/release/{tag}/bin/linux/amd64/kubectl
+    destination: linux-amd64/kubectl
+    checksum:
+      type: file
+      url: https://dl.k8s.io/release/{tag}/bin/linux/amd64/kubectl.sha256
+  windows-amd64:
+    url: https://dl.k8s.io/release/{tag}/bin/windows/amd64/kubectl.exe
+    destination: windows-amd64/kubectl.exe
+    checksum:
+      type: file
+      url: https://dl.k8s.io/release/{tag}/bin/windows/amd64/kubectl.exe.sha256

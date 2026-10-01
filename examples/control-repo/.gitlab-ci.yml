@@ -1,0 +1,34 @@
+# .gitlab-ci.yml of a Toolbot control repository on GitLab.
+#
+# The repository contains only toolbot.yaml (and this file). Toolbot runs from
+# the pinned image and maintains the repositories listed under `targets`.
+#
+# Schedules (Build → Pipeline schedules), one per target set:
+#
+#   Description       Interval       Variables
+#   Toolbot nightly   0 2 * * *      TOOLBOT_RUN=true   TOOLBOT_CHECK_ARGS=--targets nightly
+#   Toolbot weekly    0 6 * * 1      TOOLBOT_RUN=true   TOOLBOT_CHECK_ARGS=--targets weekly
+#
+# Preview a set without changing anything: run a pipeline manually with
+#   TOOLBOT_RUN=true   TOOLBOT_CHECK_ARGS=--targets nightly --dry-run
+#
+# CI/CD variables (masked + protected): the token-env names from toolbot.yaml,
+# e.g. TOOLBOT_GITLAB_TOKEN, TOOLBOT_GHE_TOKEN, TOOLBOT_GITHUB_TOKEN.
+
+include:
+  - project: platform/toolbot
+    ref: v0.1.0
+    file: /templates/toolbot.gitlab-ci.yml
+
+variables:
+  TOOLBOT_IMAGE: gitlab.example.com:5050/platform/toolbot:0.1.0
+
+# Merge requests to this repository: validate toolbot.yaml and show which
+# repositories each target set resolves to.
+toolbot-targets:
+  extends: .toolbot
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - toolbot validate
+    - toolbot targets --targets all

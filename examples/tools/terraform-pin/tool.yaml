@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# Terraform version pin — nothing downloaded, only version text bumped.
+#
+# WHAT THIS EXAMPLE SHOWS: `version-files` without `assets`. Many
+# repositories don't commit the Terraform binary; they pin the version for
+# tfenv/tfswitch (.terraform-version), a Dockerfile ARG or a CI variable.
+# Toolbot finds new Terraform versions and opens one merge request that
+# changes every pin together.
+#
+#   * A path starting with "/" is relative to the repository root.
+#   * The template is literal text with {version}: Toolbot replaces the text
+#     for the current version with the text for the new one, and fails if the
+#     file doesn't contain the current version (so tool.yaml and the pins can
+#     never silently drift apart). `toolbot verify` checks this on every MR.
+#
+# Upstream: https://github.com/hashicorp/terraform/releases
+
+name: terraform-pin
+version: "1.16.3"
+tag: v{version}
+
+source:
+  provider: github
+  repository: hashicorp/terraform
+
+version-files:
+  - path: /.terraform-version
+    template: "{version}"
+  # More pins in the same repository, for example:
+  # - path: /Dockerfile
+  #   template: "ARG TERRAFORM_VERSION={version}"
+  # - path: /.gitlab-ci.yml
+  #   template: 'TERRAFORM_VERSION: "{version}"'

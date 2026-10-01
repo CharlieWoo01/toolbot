@@ -12,8 +12,14 @@ Real, working definitions for tools you may want Toolbot to manage. Each file is
 | [`gitleaks`](tools/gitleaks/tool.yaml) | GitHub | Shared checksum file with the version in its name |
 | [`trivy`](tools/trivy/tool.yaml) | GitHub | `ignore` to hold back a major version; picking two files out of a busy release |
 | [`glab`](tools/glab/tool.yaml) | **GitLab** | A tool released on GitLab.com instead of GitHub |
+| [`terraform`](tools/terraform/tool.yaml) | GitHub + download site | ZIPs from releases.hashicorp.com verified with `SHA256SUMS`, then **`extract`** the binary |
+| [`terraform-pin`](tools/terraform-pin/tool.yaml) | GitHub | **Version pins only**: bumps [`.terraform-version`](.terraform-version), no binary committed |
+| [`helm`](tools/helm/tool.yaml) | GitHub + download site | `extract` from tar.gz/zip; `allow: "<4.0.0"` to stay on Helm 3 |
+| [`kubectl`](tools/kubectl/tool.yaml) | GitHub + download site | Plain binaries by URL with per-file checksum URLs; `allow` one minor line |
 
 The tool this repository actually tracks, `pact-broker-cli`, is in [`../tools/`](../tools/pact-broker-cli/tool.yaml).
+
+[`control-repo/`](control-repo/README.md) is an example **control repository** (GitOps): hosts, central version rules and scheduled target sets covering whole GitLab groups and GitHub organisations.
 
 ## Try them without changing anything
 

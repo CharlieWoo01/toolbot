@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=../../../schema/tool.schema.json
+#
+# Terraform — infrastructure as code.
+#
+# WHAT THIS EXAMPLE SHOWS: a tool shipped as ZIP archives that are NOT
+# attached to its GitHub releases. HashiCorp publishes them on
+# releases.hashicorp.com.
+#   * Versions come from GitHub releases (hashicorp/terraform), which also
+#     flag alphas/betas as prereleases (skipped by default).
+#   * Each ZIP is downloaded from its `url` and verified against HashiCorp's
+#     SHA256SUMS file (which lists the ZIPs), then only the `terraform`
+#     binary inside it is committed (`extract`).
+#   * Linux binaries get the executable bit in git (no file extension).
+#
+# Upstream:
+#   versions   https://github.com/hashicorp/terraform/releases   (v1.16.4, v1.17.0-beta2 …)
+#   downloads  https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip
+#   checksums  https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_SHA256SUMS
+#
+# Only need to bump a version pin (e.g. .terraform-version for tfenv), not
+# commit the binary? See ../terraform-pin/tool.yaml.
+
+name: terraform
+version: "1.16.3"
+tag: v{version}
+
+source:
+  provider: github
+  repository: hashicorp/terraform
+
+checksum:
+  type: file
+  url: https://releases.hashicorp.com/terraform/{version}/terraform_{version}_SHA256SUMS
+
+assets:
+  linux-amd64:
+    url: https://releases.hashicorp.com/terraform/{version}/terraform_{version}_linux_amd64.zip
+    extract: terraform
+    destination: linux-amd64/terraform
+  windows-amd64:
+    url: https://releases.hashicorp.com/terraform/{version}/terraform_{version}_windows_amd64.zip
+    extract: terraform.exe
+    destination: windows-amd64/terraform.exe
